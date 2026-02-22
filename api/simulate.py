@@ -95,7 +95,7 @@ def simulate():
             sim.fx_queues[lane] += new_cars
 
         ev_priorities = {"Ambulance": 1, "Fire": 2, "Police": 3}
-        ev_icons = {"Ambulance": "🚑", "Fire": "🚒", "Police": "🚓"}
+        ev_icons = {"Ambulance": "🚑 Ambulance", "Fire": "🚒 Fire Brigade", "Police": "🚓 Police"}
         active_evs = []
         
         for lane in sim.lanes:
@@ -155,7 +155,7 @@ def simulate():
             cycle_stats_ai[lane] = {"failed": res['unc'], "wasted": res['wst']}
 
             event_ai = ""
-            if res['ev']: event_ai = f"{res['ev']['icon']} EVP ✅ | "
+            if res['ev']: event_ai = f"{res['ev']['icon']} Priority ✅ | "
             elif sim.emergency_cooldowns[lane] > 0: event_ai = "⚡ Recovery | "
 
             timing_str = f"{res['alloc']}s ✂️ Cut to {res['used']}s" if res['used'] < res['alloc'] else f"{res['alloc']}s"
