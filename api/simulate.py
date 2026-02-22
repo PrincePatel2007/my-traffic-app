@@ -7,21 +7,29 @@ app = Flask(__name__)
 class GradientRLAgent:
     def __init__(self, lanes):
         self.lanes = lanes
+        # Neural weights for each lane. The AI updates these via Gradient Descent
         self.weights = {lane: 1.0 for lane in lanes}
         self.learning_rate = 0.01 
 
     def get_action(self, lane, queue, lane_count, avg_car_time):
-        # Safety net: lane_count can never be 0
+        # Forward Pass: Predict optimal time based on current learned weights
         safe_lane_count = max(1, lane_count)
         ideal_base_time = (queue / safe_lane_count) * avg_car_time
         target = ideal_base_time * self.weights[lane]
+        
+        # We always enforce a minimum 15s green and maximum 160s green for safety
         return max(15, min(160, int(target)))
 
     def backpropagate(self, lane, failed_cars, wasted_time):
+        # Backward Pass (Learning): Adjust weights based on the loss gradients
         if failed_cars > 0:
+            # Gradient penalty for failing cars: drastically increase weight to get more time
             self.weights[lane] += self.learning_rate * failed_cars * 1.5
         elif wasted_time > 0:
+            # Gradient penalty for wasting time: decrease weight to shrink green time and save cross-traffic
             self.weights[lane] -= self.learning_rate * (wasted_time / 5.0)
+
+        # Gradient Clipping to prevent the model from exploding
         self.weights[lane] = max(0.5, min(3.0, self.weights[lane]))
 
 
@@ -33,6 +41,11 @@ class RealisticTrafficOptimizer:
         self.ai_queues = {lane: 0 for lane in self.lanes}
         self.fx_queues = {lane: 0 for lane in self.lanes}
         self.emergency_cooldowns = {lane: 0 for lane in self.lanes}
+        
+        # THE FIX: Added these two missing loss trackers back in!
+        self.ai_total_loss = 0
+        self.fx_total_loss = 0
+        
         self.ml_agent = GradientRLAgent(self.lanes)
 
     def generate_arrivals(self, lane, arrival_ranges_per_min, cycle_length_mins):
@@ -230,6 +243,5 @@ def simulate():
         return jsonify({"ai_logs": log_data_ai, "fx_logs": log_data_fx})
         
     except Exception as e:
-        # If it crashes, send the EXACT error message to the frontend so we can debug!
         error_msg = f"Python Crash: {str(e)} | Trace: {traceback.format_exc()}"
         return jsonify({"error": error_msg}), 500
