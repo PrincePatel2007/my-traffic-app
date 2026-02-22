@@ -19,13 +19,20 @@ export default function TrafficDashboard() {
 
   const runSimulation = async () => {
     setIsSimulating(true); setAiLogs([]); setFxLogs([]); setMetrics({ aiLoss: 0, fxLoss: 0, gain: 0 });
+    
     try {
       const response = await fetch('/api/simulate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ total_cycles: totalCycles, avg_car_time: avgCarTime, arrivals_per_min: arrivalsPerMin, lanes: lanes, fx_times: fxTimes, ev_probs: { North: evProbs.North / 100, South: evProbs.South / 100, East: evProbs.East / 100, West: evProbs.West / 100 } })
       });
+      
       const data = await response.json();
-      if (!data.ai_logs) throw new Error("Invalid data.");
+      
+      // ERROR HANDLING: If Python crashed, show the exact error.
+      if (!response.ok || data.error) {
+        throw new Error(data.error || "Server crashed without an error message.");
+      }
+      if (!data.ai_logs) throw new Error("Invalid data format received.");
 
       let i = 0;
       const interval = setInterval(() => {
@@ -38,7 +45,12 @@ export default function TrafficDashboard() {
         setMetrics({ aiLoss: aiL, fxLoss: fxL, gain: fxL > 0 ? ((fxL - aiL) / fxL) * 100 : 0 });
         i++;
       }, 100); 
-    } catch (error) { setIsSimulating(false); alert("Error connecting to Python backend."); }
+      
+    } catch (error: any) { 
+      setIsSimulating(false); 
+      console.error(error);
+      alert(`Simulation Failed:\n\n${error.message}`); 
+    }
   };
 
   return (
@@ -142,12 +154,10 @@ function TableSection({ title, data, detailed, color }: any) {
                     
                     {detailed && (
                       <div className="mt-2 flex flex-col gap-2">
-                        {/* REFINED MATHEMATICAL METRICS */}
                         <div className="flex flex-wrap gap-2 text-[10px] uppercase font-bold text-slate-500 bg-slate-50 p-2 rounded border">
                           <span className="bg-white px-1.5 py-0.5 rounded border">📥 ARR: {row?.Arrivals ?? 0}</span>
                           <span className={`px-1.5 py-0.5 rounded border ${(row?.Failed || 0) > 0 ? 'bg-red-50 text-red-600 border-red-200' : 'bg-white'}`}>❌ FAIL: {row?.Failed ?? 0}</span>
                           
-                          {/* NEW EXPLICIT MATH BREAKDOWN */}
                           <span className={`px-1.5 py-0.5 rounded border ${row?.RedTime > 60 ? 'bg-orange-50 text-orange-600 border-orange-200' : 'bg-slate-100'}`}>🛑 RED TIME: {row?.RedTime ?? 0}S</span>
                           <span className="bg-sky-50 text-sky-600 px-1.5 py-0.5 rounded border border-sky-200">⏳ WAIT LOSS: {row?.LossWait ?? 0}</span>
                           <span className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-200">💥 FAIL LOSS: {row?.LossFail ?? 0}</span>
