@@ -13,8 +13,6 @@ export default function TrafficDashboard() {
   
   const [aiLogs, setAiLogs] = useState<any[]>([]);
   const [fxLogs, setFxLogs] = useState<any[]>([]);
-  
-  // NEW: Added isEvaluating flag to track when the last 20% starts
   const [metrics, setMetrics] = useState({ aiLoss: 0, fxLoss: 0, gain: 0, isEvaluating: false });
   const [isSimulating, setIsSimulating] = useState(false);
   const [isDetailedView, setIsDetailedView] = useState(false);
@@ -32,7 +30,6 @@ export default function TrafficDashboard() {
       if (!response.ok || data.error) throw new Error(data.error || "Server crashed.");
       if (!data.ai_logs) throw new Error("Invalid data format received.");
 
-      // THE FIX: Calculate exactly where the final 20% of cycles begins
       const evalStartIdx = Math.floor(data.ai_logs.length * 0.8);
       let i = 0;
       
@@ -45,62 +42,46 @@ export default function TrafficDashboard() {
         let aiL = 0;
         let fxL = 0;
         
-        // ONLY accumulate the loss if we are in the Evaluation Phase (Last 20%)
         if (isEval) {
             aiL = data.ai_logs.slice(evalStartIdx, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
             fxL = data.fx_logs.slice(evalStartIdx, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
         }
         
-        setMetrics({ 
-            aiLoss: aiL, 
-            fxLoss: fxL, 
-            gain: fxL > 0 ? ((fxL - aiL) / fxL) * 100 : 0,
-            isEvaluating: isEval 
-        });
+        setMetrics({ aiLoss: aiL, fxLoss: fxL, gain: fxL > 0 ? ((fxL - aiL) / fxL) * 100 : 0, isEvaluating: isEval });
         i++;
       }, 100); 
       
-    } catch (error: any) { 
-      setIsSimulating(false); 
-      alert(`Simulation Failed:\n\n${error.message}`); 
-    }
+    } catch (error: any) { setIsSimulating(false); alert(`Simulation Failed:\n\n${error.message}`); }
   };
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900 font-sans">
       <div className="w-80 bg-white border-r border-slate-200 p-6 overflow-y-auto h-screen sticky top-0 shadow-sm z-10 shrink-0 custom-scrollbar">
         <h2 className="text-2xl font-black flex items-center gap-2 mb-8 text-indigo-600 tracking-tight"><Activity size={28} /> Control Panel</h2>
-        
         <div className="space-y-6 text-sm">
           <div><label className="flex items-center justify-between font-bold mb-2 text-slate-700"><span>Cycles</span><span className="bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded text-xs">{totalCycles}</span></label>
             <input type="range" min="10" max="200" value={totalCycles} onChange={(e) => setTotalCycles(Number(e.target.value))} className="w-full accent-indigo-600" /></div>
-
           <div className="border-t border-slate-100 pt-5"><h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700"><Timer size={16} /> Manual Timings (s)</h3>
             <div className="grid grid-cols-2 gap-3">{['North', 'South', 'East', 'West'].map(lane => (
                 <div key={lane} className="flex flex-col"><label className="text-[10px] uppercase font-bold text-slate-400 mb-1">{lane}</label>
                   <input type="number" value={(fxTimes as any)[lane]} onChange={(e) => setFxTimes({...fxTimes, [lane]: Number(e.target.value)})} className="border rounded-md p-1.5 text-center outline-none text-xs font-mono font-bold" /></div>
               ))}</div></div>
-
           <div className="border-t border-slate-100 pt-5"><h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700"><Car size={16} /> Arrivals / Minute</h3>
             {['North', 'South', 'East', 'West'].map(lane => (
               <div key={lane} className="mb-3 flex items-center justify-between"><label className="block text-[10px] uppercase font-bold text-slate-500 w-12">{lane}</label>
                 <div className="flex gap-1"><input type="number" value={(arrivalsPerMin as any)[lane][0]} onChange={(e) => setArrivalsPerMin({...arrivalsPerMin, [lane]: [Number(e.target.value), (arrivalsPerMin as any)[lane][1]]})} className="w-14 border rounded-md p-1.5 text-center outline-none text-xs" />
                   <span className="text-slate-300 self-center">-</span><input type="number" value={(arrivalsPerMin as any)[lane][1]} onChange={(e) => setArrivalsPerMin({...arrivalsPerMin, [lane]: [(arrivalsPerMin as any)[lane][0], Number(e.target.value)]})} className="w-14 border rounded-md p-1.5 text-center outline-none text-xs" /></div></div>
             ))}</div>
-
           <div className="border-t border-slate-100 pt-5"><label className="flex items-center justify-between font-bold mb-2 text-slate-700"><span>Avg Time / Vehicle</span><span className="bg-slate-100 px-2 py-0.5 rounded text-xs">{avgCarTime}s</span></label>
             <input type="range" min="2" max="10" value={avgCarTime} onChange={(e) => setAvgCarTime(Number(e.target.value))} className="w-full accent-indigo-600" /></div>
-
           <div className="border-t border-slate-100 pt-5"><h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700"><GitMerge size={16} /> Number of Lanes</h3>
             <div className="grid grid-cols-2 gap-3"><div className="flex flex-col"><label className="text-[10px] uppercase font-bold text-slate-400 mb-1">North/South</label><input type="number" min="1" max="6" value={lanes.NS} onChange={(e) => setLanes({...lanes, NS: Number(e.target.value)})} className="border rounded-md p-1.5 text-center outline-none text-xs font-bold" /></div>
               <div className="flex flex-col"><label className="text-[10px] uppercase font-bold text-slate-400 mb-1">East/West</label><input type="number" min="1" max="6" value={lanes.EW} onChange={(e) => setLanes({...lanes, EW: Number(e.target.value)})} className="border rounded-md p-1.5 text-center outline-none text-xs font-bold" /></div></div></div>
-
           <div className="border-t border-slate-100 pt-5 pb-2"><div className="bg-red-50 p-4 rounded-xl border border-red-100 shadow-inner"><h3 className="font-black mb-4 flex items-center gap-2 text-red-700 text-sm"><Siren size={18} /> EV Probability (%)</h3>
               {['North', 'South', 'East', 'West'].map(lane => (
                 <div key={lane} className="mb-3 last:mb-0"><label className="flex justify-between text-[10px] uppercase font-black text-red-400 mb-1"><span>{lane}</span><span>{(evProbs as any)[lane]}%</span></label>
                   <input type="range" min="0" max="100" value={(evProbs as any)[lane]} onChange={(e) => setEvProbs({...evProbs, [lane]: Number(e.target.value)})} className="w-full accent-red-500" /></div>
               ))}</div></div>
-
           <button onClick={runSimulation} disabled={isSimulating} className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold hover:bg-slate-800 transition disabled:bg-slate-300 shadow-md">
             {isSimulating ? "Simulating..." : "Launch Simulation"}
           </button>
@@ -118,29 +99,9 @@ export default function TrafficDashboard() {
         </header>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
-          {/* NEW: Dynamic Metric Cards based on Training vs Evaluation Phase */}
-          <MetricCard 
-            title="Fixed Inefficiency (Eval Phase)" 
-            value={metrics.isEvaluating ? metrics.fxLoss.toLocaleString() : "Training..."} 
-            icon={<AlertTriangle size={20} />} 
-            color={metrics.isEvaluating ? "text-red-600" : "text-slate-400"} 
-            bgColor={metrics.isEvaluating ? "bg-red-50" : "bg-slate-100"} 
-          />
-          <MetricCard 
-            title="ML Inefficiency (Eval Phase)" 
-            value={metrics.isEvaluating ? metrics.aiLoss.toLocaleString() : "Training..."} 
-            icon={<Zap size={20} />} 
-            color={metrics.isEvaluating ? "text-emerald-600" : "text-slate-400"} 
-            bgColor={metrics.isEvaluating ? "bg-emerald-50" : "bg-slate-100"} 
-            subLabel={metrics.isEvaluating ? `Saved ${Math.max(0, metrics.fxLoss - metrics.aiLoss).toLocaleString()} pts` : "Learning Environment"} 
-          />
-          <MetricCard 
-            title="Total Gain (Eval Phase)" 
-            value={metrics.isEvaluating ? `${metrics.gain.toFixed(1)}%` : "---"} 
-            icon={<TrendingDown size={20} />} 
-            color={metrics.isEvaluating ? "text-indigo-600" : "text-slate-400"} 
-            bgColor={metrics.isEvaluating ? "bg-indigo-50" : "bg-slate-100"} 
-          />
+          <MetricCard title="Fixed Inefficiency (Eval Phase)" value={metrics.isEvaluating ? metrics.fxLoss.toLocaleString() : "Training..."} icon={<AlertTriangle size={20} />} color={metrics.isEvaluating ? "text-red-600" : "text-slate-400"} bgColor={metrics.isEvaluating ? "bg-red-50" : "bg-slate-100"} />
+          <MetricCard title="ML Inefficiency (Eval Phase)" value={metrics.isEvaluating ? metrics.aiLoss.toLocaleString() : "Training..."} icon={<Zap size={20} />} color={metrics.isEvaluating ? "text-emerald-600" : "text-slate-400"} bgColor={metrics.isEvaluating ? "bg-emerald-50" : "bg-slate-100"} subLabel={metrics.isEvaluating ? `Saved ${Math.max(0, metrics.fxLoss - metrics.aiLoss).toLocaleString()} pts` : "Learning Environment"} />
+          <MetricCard title="Total Gain (Eval Phase)" value={metrics.isEvaluating ? `${metrics.gain.toFixed(1)}%` : "---"} icon={<TrendingDown size={20} />} color={metrics.isEvaluating ? "text-indigo-600" : "text-slate-400"} bgColor={metrics.isEvaluating ? "bg-indigo-50" : "bg-slate-100"} />
         </div>
 
         <div className={`grid gap-8 items-start ${isDetailedView ? 'grid-cols-1' : '2xl:grid-cols-2'}`}>
@@ -190,12 +151,15 @@ function TableSection({ title, data, detailed, color }: any) {
                         <div className="flex flex-wrap gap-2 text-[10px] uppercase font-bold text-slate-500 bg-slate-50 p-2 rounded border">
                           <span className="bg-white px-1.5 py-0.5 rounded border">📥 ARR: {row?.Arrivals ?? 0}</span>
                           <span className={`px-1.5 py-0.5 rounded border ${(row?.Failed || 0) > 0 ? 'bg-red-50 text-red-600 border-red-200' : 'bg-white'}`}>❌ FAIL: {row?.Failed ?? 0}</span>
-                          
                           <span className={`px-1.5 py-0.5 rounded border ${row?.RedTime > 60 ? 'bg-orange-50 text-orange-600 border-orange-200' : 'bg-slate-100'}`}>🛑 RED: {row?.RedTime ?? 0}S</span>
                           <span className="bg-sky-50 text-sky-600 px-1.5 py-0.5 rounded border border-sky-200">⏳ WAIT LOSS: {row?.LossWait ?? 0}</span>
                           <span className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-200">💥 FAIL LOSS: {row?.LossFail ?? 0}</span>
-                          
                           <span className="bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded border border-rose-200">🚗 QUEUE LOSS: {row?.LossQueue ?? 0}</span>
+                          
+                          {/* THE NEW STARVATION PENALTY UI */}
+                          {row?.LossStarve > 0 && (
+                            <span className="bg-red-600 text-white px-1.5 py-0.5 rounded shadow-sm animate-pulse">🚨 STARVED: {row?.LossStarve} PTS</span>
+                          )}
                         </div>
                       </div>
                     )}
