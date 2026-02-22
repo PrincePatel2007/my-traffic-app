@@ -12,21 +12,21 @@ class GradientRLAgent:
 
     def get_action(self, lane, queue, lane_count, avg_car_time):
         if queue == 0:
-            return 0 # Still completely skips empty lanes
+            return 0 
             
         safe_lane_count = max(1, lane_count)
         ideal_base_time = (queue / safe_lane_count) * avg_car_time
         target = ideal_base_time * self.weights[lane]
         
-        # LOOPHOLE FIX: If there are cars, it must allocate at least enough time to clear 1 row
         min_time_for_one_car = avg_car_time 
         return max(min_time_for_one_car, min(160, int(round(target))))
 
     def backpropagate(self, lane, failed_cars, wasted_time, holdovers):
+        # FIX: Smoothed out the panic surge so weights don't explode uncontrollably
         if holdovers > 0:
-            self.weights[lane] += self.learning_rate * holdovers * 2.5
+            self.weights[lane] += self.learning_rate * min(20, holdovers) * 0.5
         elif failed_cars > 0:
-            self.weights[lane] += self.learning_rate * failed_cars * 1.5
+            self.weights[lane] += self.learning_rate * min(20, failed_cars) * 0.2
         elif wasted_time > 0:
             self.weights[lane] -= self.learning_rate * (wasted_time / 5.0)
 
@@ -44,6 +44,10 @@ class RealisticTrafficOptimizer:
         self.ai_total_loss = 0
         self.fx_total_loss = 0
         self.ml_agent = GradientRLAgent(self.lanes)
+        
+        # THE FIX: Track the ACTUAL physical time spent in the previous cycle
+        self.last_ai_cycle_time = 120 
+        self.last_fx_cycle_time = 120
 
     def generate_arrivals(self, lane, arrival_ranges_per_min, cycle_length_mins):
         prob = random.random()
@@ -79,10 +83,11 @@ class RealisticTrafficOptimizer:
                 
         return uncleared, used_time, wasted
 
+
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Dynamic Time Physics ML is Live!"})
+        return jsonify({"status": "SUCCESS! Time Dilation Physics Patched!"})
 
     try:
         data = request.json
@@ -103,23 +108,18 @@ def simulate():
         for cycle in range(1, total_cycles + 1):
             sim.fx_times = user_fx_times.copy()
             
-            # DECOUPLED PHYSICS: Calculate exact minutes passed for AI vs Fixed individually
-            total_ai_sum = sum(sim.ai_times.values())
-            total_fx_sum = sum(sim.fx_times.values())
-            
-            ai_cycle_mins = max(0.05, total_ai_sum / 60.0)
-            fx_cycle_mins = max(0.05, total_fx_sum / 60.0)
+            # THE FIX: Generate arrivals strictly based on the ACTUAL time the previous cycle took
+            ai_cycle_mins = max(0.05, sim.last_ai_cycle_time / 60.0)
+            fx_cycle_mins = max(0.05, sim.last_fx_cycle_time / 60.0)
 
             new_arrivals_ai = {}
             new_arrivals_fx = {}
             
             for lane in sim.lanes:
-                # The faster the AI finishes the cycle, the fewer cars arrive!
                 ai_cars = sim.generate_arrivals(lane, arrivals_per_min, ai_cycle_mins)
                 new_arrivals_ai[lane] = ai_cars
                 sim.ai_queues[lane] += ai_cars
                 
-                # Fixed timer is slow, so it gets punished with more arriving cars
                 fx_cars = sim.generate_arrivals(lane, arrivals_per_min, fx_cycle_mins)
                 new_arrivals_fx[lane] = fx_cars
                 sim.fx_queues[lane] += fx_cars
@@ -158,9 +158,12 @@ def simulate():
                 ai_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': used, 'wst': wst, 'ev': ev_data}
                 total_ai_used_time += used
 
+            # RECORD EXACT ACTUAL TIME USED FOR NEXT CYCLE'S ARRIVALS
+            sim.last_ai_cycle_time = total_ai_used_time
+
             # 🧠 PHASE 1: SIMULATE FIXED LANES
             fx_phase_results = {}
-            total_fx_used_time = sum(sim.fx_times.values())
+            total_fx_used_time = 0
             for lane in fx_execution_order:
                 q = sim.fx_queues[lane]
                 alloc = sim.fx_times[lane]
@@ -168,6 +171,9 @@ def simulate():
                 ev_data = next((ev for ev in active_evs if ev["lane"] == lane), None)
                 unc, used, wst = sim.simulate_lane_traffic(q, alloc, avg_car_time, False, lane_count)
                 fx_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': alloc, 'wst': wst, 'ev': ev_data}
+                total_fx_used_time += used
+                
+            sim.last_fx_cycle_time = total_fx_used_time
 
             # 🧠 PHASE 2: EXACT MATHEMATICAL LOSS CALCULATION
             def calculate_exact_loss(lane, res, red_time, is_ai, current_new_arrivals):
@@ -179,11 +185,8 @@ def simulate():
                     
                 loss_waiting = res['q'] * penalty_per_car
                 
-                # LOOPHOLE FIX: Enforce a strict minimum 45s wait penalty for failed cars 
-                # so the AI can't cheat by shrinking the cycle to 0s
                 effective_fail_red = max(45, red_time)
                 loss_failed = res['unc'] * (effective_fail_red * 1.5)
-                
                 loss_queue = res['q'] * 5.0
                 
                 holdovers = max(0, res['q'] - current_new_arrivals[lane])
