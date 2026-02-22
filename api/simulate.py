@@ -57,8 +57,14 @@ class RealisticTrafficOptimizer:
             targets[l] = max(15, min(160, int(current + adjust)))
         return targets
 
-@app.route('/api/simulate', methods=['POST'])
+# We added 'GET' here so we can test it in the browser!
+@app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
+    # THE SAFETY TEST
+    if request.method == 'GET':
+        return jsonify({"status": "SUCCESS! Python is alive and ready for the hackathon!"})
+
+    # THE ACTUAL SIMULATION
     data = request.json
     total_cycles = data.get('total_cycles', 50)
     avg_car_time = data.get('avg_car_time', 5)
@@ -116,7 +122,6 @@ def simulate():
                 
         fx_execution_order = ["North", "South", "East", "West"]
 
-        # PROCESS AI SYSTEM
         for phase_step, lane in enumerate(ai_execution_order, 1):
             q_before_ai = sim.ai_queues[lane]
             base_ai_time = sim.ai_times[lane]
@@ -142,7 +147,6 @@ def simulate():
 
             log_data_ai.append({"Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": timing_str_ai, "Queue": queue_display_ai, "Cycle Loss": ai_l, "Events": event_ai})
 
-        # PROCESS FIXED SYSTEM
         for phase_step, lane in enumerate(fx_execution_order, 1):
             q_before_fx = sim.fx_queues[lane]
             max_fx_time = sim.fx_times[lane]
@@ -162,7 +166,6 @@ def simulate():
 
             log_data_fx.append({"Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": timing_str_fx, "Queue": queue_display_fx, "Cycle Loss": fx_l, "Events": event_fx})
 
-        # AI Optimization
         target_times = sim.ask_gemini_for_targets(cycle_stats_ai, avg_car_time)
         is_any_recovering = any(c > 0 for c in sim.emergency_cooldowns.values())
         for lane in sim.lanes:
