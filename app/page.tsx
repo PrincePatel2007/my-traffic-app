@@ -227,7 +227,7 @@ function DataTable({ data, isDetailedView }: { data: any[], isDetailedView: bool
                     {isDetailedView && (
                       <div className="mt-2 flex flex-wrap gap-2 text-[10px] uppercase font-bold text-slate-500 bg-slate-50 p-2 rounded border border-slate-100">
                         <span className="bg-white px-1.5 py-0.5 rounded border border-slate-200">
-                          📥 Arrivals: {row?.Arrivals ?? '-'}
+                          📥 Arr: {row?.Arrivals ?? '-'}
                         </span>
                         <span className={`px-1.5 py-0.5 rounded border ${(row?.Failed || 0) > 0 ? 'bg-red-50 border-red-200 text-red-600' : 'bg-white border-slate-200'}`}>
                           ❌ Fail: {row?.Failed ?? '-'}
@@ -242,7 +242,7 @@ function DataTable({ data, isDetailedView }: { data: any[], isDetailedView: bool
                         </span>
                         
                         <span className="bg-indigo-50 border-indigo-200 text-indigo-600 px-1.5 py-0.5 rounded border">
-                          ⏳ Wait Penalty: {row?.WaitPenalty ?? '-'} pts
+                          ⏳ Pen: {row?.WaitPenalty ?? '-'} pts
                         </span>
                       </div>
                     )}

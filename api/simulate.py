@@ -95,7 +95,7 @@ def simulate():
             sim.fx_queues[lane] += new_cars
 
         ev_priorities = {"Ambulance": 1, "Fire": 2, "Police": 3}
-        ev_icons = {"Ambulance": "🚑 Ambulance", "Fire": "🚒 Fire", "Police": "🚓 Police"}
+        ev_icons = {"Ambulance": "🚑", "Fire": "🚒", "Police": "🚓"}
         active_evs = []
         
         for lane in sim.lanes:
