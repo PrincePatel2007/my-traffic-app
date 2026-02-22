@@ -18,6 +18,7 @@ export default function TrafficDashboard() {
   const [isDetailedView, setIsDetailedView] = useState(false);
   const [simError, setSimError] = useState<string | null>(null);
 
+  // REAL-TIME CAPACITY CALCULATOR (NOW INCLUDES LANE MULTIPLIERS)
   const calculateCapacity = () => {
     const totalAvgArrivals = 
       ((arrivalsPerMin.North[0] + arrivalsPerMin.North[1]) / 2) +
@@ -25,8 +26,12 @@ export default function TrafficDashboard() {
       ((arrivalsPerMin.East[0] + arrivalsPerMin.East[1]) / 2) +
       ((arrivalsPerMin.West[0] + arrivalsPerMin.West[1]) / 2);
     
-    // Theoretical max clearance based on standard 120s cycle minus 44s dead time (63% efficiency)
-    const maxClearancePerMin = (60 / avgCarTime) * 0.63; 
+    // Calculate the average number of lanes across all 4 directions
+    const avgLanes = (lanes.NS * 2 + lanes.EW * 2) / 4;
+    
+    // Base capacity for 1 lane is (60 / avgCarTime) * 63% efficiency (due to dead time).
+    // Multiply by the average lanes to get the total intersection bandwidth!
+    const maxClearancePerMin = ((60 / avgCarTime) * 0.63) * avgLanes; 
     const saturationRatio = (totalAvgArrivals / maxClearancePerMin) * 100;
     
     return { ratio: saturationRatio, limit: maxClearancePerMin, demand: totalAvgArrivals };
@@ -64,12 +69,12 @@ export default function TrafficDashboard() {
       <div className="w-80 bg-white border-r border-slate-200 p-6 overflow-y-auto h-screen sticky top-0 shadow-sm z-10 shrink-0 custom-scrollbar">
         <h2 className="text-2xl font-black flex items-center gap-2 mb-8 text-indigo-600 tracking-tight"><Activity size={28} /> Control Panel</h2>
         
-        <div className={`mb-6 p-4 rounded-xl border ${cap.ratio > 100 ? 'bg-red-50 border-red-200' : cap.ratio > 80 ? 'bg-orange-50 border-orange-200' : 'bg-emerald-50 border-emerald-200'}`}>
+        <div className={`mb-6 p-4 rounded-xl border transition-colors duration-300 ${cap.ratio > 100 ? 'bg-red-50 border-red-200' : cap.ratio > 80 ? 'bg-orange-50 border-orange-200' : 'bg-emerald-50 border-emerald-200'}`}>
             <h3 className={`font-black flex items-center gap-2 mb-2 text-sm ${cap.ratio > 100 ? 'text-red-700' : cap.ratio > 80 ? 'text-orange-700' : 'text-emerald-700'}`}>
                 <Gauge size={16} /> Intersection Saturation
             </h3>
             <div className="w-full bg-slate-200 rounded-full h-2.5 mb-2 overflow-hidden">
-                <div className={`h-2.5 rounded-full ${cap.ratio > 100 ? 'bg-red-500' : cap.ratio > 80 ? 'bg-orange-500' : 'bg-emerald-500'}`} style={{ width: `${Math.min(cap.ratio, 100)}%` }}></div>
+                <div className={`h-2.5 rounded-full transition-all duration-500 ${cap.ratio > 100 ? 'bg-red-500' : cap.ratio > 80 ? 'bg-orange-500' : 'bg-emerald-500'}`} style={{ width: `${Math.min(cap.ratio, 100)}%` }}></div>
             </div>
             <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">
                 Demand: {cap.demand.toFixed(1)} / Capacity: {cap.limit.toFixed(1)}
