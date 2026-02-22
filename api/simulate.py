@@ -31,6 +31,7 @@ class GradientRLAgent:
 
         self.weights[lane] = max(0.1, min(5.0, self.weights[lane]))
 
+
 class RealisticTrafficOptimizer:
     def __init__(self):
         self.lanes = ["North", "South", "East", "West"]
@@ -119,9 +120,7 @@ def simulate():
         raw_lanes = data.get('lanes', {"NS": 3, "EW": 3})
         lanes_config = {"NS": max(1, int(raw_lanes.get("NS", 3) or 3)), "EW": max(1, int(raw_lanes.get("EW", 3) or 3))}
         
-        # ==========================================
-        # NEW: PHYSICAL CAPACITY VALIDATOR (HCM Standards)
-        # ==========================================
+        # PHYSICAL CAPACITY VALIDATOR
         MAX_CARS_PER_MIN_PER_LANE = 32.0 
         
         for lane in ["North", "South", "East", "West"]:
@@ -140,7 +139,6 @@ def simulate():
                     f"Please lower the Arrivals/Min or add more lanes."
                 )
                 return jsonify({"error": error_msg}), 400
-        # ==========================================
 
         ev_probs = data.get('ev_probs', {"North": 0.05, "South": 0.05, "East": 0.05, "West": 0.05})
         user_fx_times = data.get('fx_times', {"North": 45, "South": 45, "East": 60, "West": 60})
@@ -278,7 +276,14 @@ def simulate():
                 loss, l_wait, l_fail, l_queue, l_starve, true_red = calculate_exact_loss(lane, res, red_time, False, new_arrivals_fx)
                 sim.fx_total_loss += loss
                 sim.fx_queues[lane] = res['unc']
-                event_fx = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_fx']}) " + ("⚠️ Lucky | " if res['alloc'] >= req else "❌ STRANDED! | ") if res['ev'] else ""
+                
+                # THE FIX: Restored the proper 4-line calculation for Emergency Vehicle required time!
+                event_fx = ""
+                if res['ev']:
+                    lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
+                    req = max(1, res['ev']['pos_fx'] // lane_count) * (avg_car_time + 1)
+                    event_fx = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_fx']}) " + ("⚠️ Lucky | " if res['alloc'] >= req else "❌ STRANDED! | ")
+                
                 timing_str = "⏭️ Skipped" if res['alloc'] == 0 else f"🟩 {res['alloc']}s (+11s 🚦)"
 
                 log_data_fx.append({
