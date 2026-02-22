@@ -4,10 +4,15 @@ import { Zap, Activity, AlertTriangle, TrendingDown, Clock, Car, Siren, LayoutLi
 
 export default function TrafficDashboard() {
   const [totalCycles, setTotalCycles] = useState(50);
-  const [avgCarTime, setAvgCarTime] = useState(5);
+  
+  // NEW: Updated to start at a valid float (2.5s)
+  const [avgCarTime, setAvgCarTime] = useState(2.5);
   
   const [lanes, setLanes] = useState({ NS: 3, EW: 3 });
-  const [arrivalsPerMin, setArrivalsPerMin] = useState({ North: [10, 25], South: [10, 25], East: [15, 35], West: [15, 35] });
+  
+  // NEW: Adjusted default traffic so it starts well under the 5 car/min/lane limit
+  const [arrivalsPerMin, setArrivalsPerMin] = useState({ North: [2, 10], South: [2, 10], East: [3, 12], West: [3, 12] });
+  
   const [fxTimes, setFxTimes] = useState({ North: 45, South: 45, East: 60, West: 60 });
   const [evProbs, setEvProbs] = useState({ North: 5, South: 5, East: 5, West: 5 });
   
@@ -16,8 +21,6 @@ export default function TrafficDashboard() {
   const [metrics, setMetrics] = useState({ aiLoss: 0, fxLoss: 0, gain: 0 });
   const [isSimulating, setIsSimulating] = useState(false);
   const [isDetailedView, setIsDetailedView] = useState(false);
-  
-  // NEW: State for capturing the physics error
   const [simError, setSimError] = useState<string | null>(null);
 
   const runSimulation = async () => {
@@ -35,7 +38,6 @@ export default function TrafficDashboard() {
       
       const data = await response.json();
       
-      // Check for the HCM Physics Error from the backend
       if (!response.ok || data.error) {
           setSimError(data.error || "Simulation failed.");
           setIsSimulating(false);
@@ -81,8 +83,16 @@ export default function TrafficDashboard() {
                 <div className="flex gap-1"><input type="number" value={(arrivalsPerMin as any)[lane][0]} onChange={(e) => setArrivalsPerMin({...arrivalsPerMin, [lane]: [Number(e.target.value), (arrivalsPerMin as any)[lane][1]]})} className="w-14 border rounded-md p-1.5 text-center outline-none text-xs" />
                   <span className="text-slate-300 self-center">-</span><input type="number" value={(arrivalsPerMin as any)[lane][1]} onChange={(e) => setArrivalsPerMin({...arrivalsPerMin, [lane]: [(arrivalsPerMin as any)[lane][0], Number(e.target.value)]})} className="w-14 border rounded-md p-1.5 text-center outline-none text-xs" /></div></div>
             ))}</div>
-          <div className="border-t border-slate-100 pt-5"><label className="flex items-center justify-between font-bold mb-2 text-slate-700"><span>Avg Time / Vehicle</span><span className="bg-slate-100 px-2 py-0.5 rounded text-xs">{avgCarTime}s</span></label>
-            <input type="range" min="2" max="10" value={avgCarTime} onChange={(e) => setAvgCarTime(Number(e.target.value))} className="w-full accent-indigo-600" /></div>
+          
+          <div className="border-t border-slate-100 pt-5">
+            <label className="flex items-center justify-between font-bold mb-2 text-slate-700">
+              <span>Avg Time / Vehicle</span>
+              <span className="bg-slate-100 px-2 py-0.5 rounded text-xs">{avgCarTime}s</span>
+            </label>
+            {/* NEW: Float constraints implemented directly in the slider */}
+            <input type="range" min="1" max="4" step="0.5" value={avgCarTime} onChange={(e) => setAvgCarTime(Number(e.target.value))} className="w-full accent-indigo-600" />
+          </div>
+
           <div className="border-t border-slate-100 pt-5"><h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700"><GitMerge size={16} /> Number of Lanes</h3>
             <div className="grid grid-cols-2 gap-3"><div className="flex flex-col"><label className="text-[10px] uppercase font-bold text-slate-400 mb-1">North/South</label><input type="number" min="1" max="6" value={lanes.NS} onChange={(e) => setLanes({...lanes, NS: Number(e.target.value)})} className="border rounded-md p-1.5 text-center outline-none text-xs font-bold" /></div>
               <div className="flex flex-col"><label className="text-[10px] uppercase font-bold text-slate-400 mb-1">East/West</label><input type="number" min="1" max="6" value={lanes.EW} onChange={(e) => setLanes({...lanes, EW: Number(e.target.value)})} className="border rounded-md p-1.5 text-center outline-none text-xs font-bold" /></div></div></div>
@@ -92,7 +102,6 @@ export default function TrafficDashboard() {
                   <input type="range" min="0" max="100" value={(evProbs as any)[lane]} onChange={(e) => setEvProbs({...evProbs, [lane]: Number(e.target.value)})} className="w-full accent-red-500" /></div>
               ))}</div></div>
           
-          {/* THE NEW INLINE ERROR DISPLAY */}
           {simError && (
             <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl text-xs font-medium whitespace-pre-line shadow-sm">
               <div className="font-black flex items-center gap-1 mb-2"><AlertTriangle size={14}/> Simulation Blocked</div>

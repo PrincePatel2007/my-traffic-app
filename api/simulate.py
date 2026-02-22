@@ -18,7 +18,7 @@ class GradientRLAgent:
         ideal_base_time = (queue / safe_lane_count) * avg_car_time
         target = ideal_base_time * self.weights[lane]
         
-        min_green = max(10, avg_car_time * 2) 
+        min_green = max(10, int(avg_car_time * 2)) 
         return max(min_green, min(160, int(round(target))))
 
     def backpropagate(self, lane, failed_cars, wasted_time, holdovers):
@@ -56,7 +56,7 @@ class RealisticTrafficOptimizer:
         spike_max = int(safe_max * 1.5) + 1
         return random.randint(safe_max, spike_max) if prob < 0.10 else random.randint(min_arr, safe_max)
 
-    def simulate_lane_traffic(self, lane, queue, allocated_green, avg_car_time, can_cut_early, lane_count, arrivals_per_min_dict):
+    def simulate_lane_traffic(self, lane, queue, allocated_green, avg_car_time, can_cut_early, lane_count, actual_arrivals, cycle_mins):
         if allocated_green == 0:
             return queue, 0, 0, 0, 0, 0
             
@@ -65,22 +65,24 @@ class RealisticTrafficOptimizer:
         overhead_startup = 3
         total_overhead = overhead_yellow + overhead_safety_red + overhead_startup
         
-        avg_arr_rate = sum(arrivals_per_min_dict[lane]) / 2.0
         safe_lane_count = max(1, lane_count)
         
-        arrival_per_min_per_lane = avg_arr_rate / safe_lane_count
-        clearance_per_min_per_lane = 60.0 / avg_car_time
+        # EXACT USER LOGIC: Calculate actual rolling arrivals per minute per lane for THIS specific cycle
+        arrival_per_min_per_lane = (actual_arrivals / cycle_mins) / safe_lane_count if cycle_mins > 0 else 0
         
-        is_continuous_flow = arrival_per_min_per_lane >= (clearance_per_min_per_lane * 0.70)
+        # Only allow trimming if the incoming wave is 2 cars or less per minute per lane
+        is_continuous_flow = arrival_per_min_per_lane > 2.0
         
-        if is_continuous_flow:
-            can_cut_early = False
+        if can_cut_early: # If the AI wants to cut early
+            if is_continuous_flow:
+                can_cut_early = False # Revoke permission, traffic is too continuous!
             
-        time_spent_moving = 0
+        time_spent_moving = 0.0
         cleared_cars = 0
         
         while cleared_cars < queue:
-            car_time = random.randint(max(1, avg_car_time - 1), avg_car_time + 1)
+            # Using random.uniform to support fractional seconds (e.g. 2.5s)
+            car_time = random.uniform(max(0.5, avg_car_time - 0.5), avg_car_time + 0.5)
             if time_spent_moving + car_time <= allocated_green:
                 cleared_cars += min(safe_lane_count, queue - cleared_cars)
                 time_spent_moving += car_time
@@ -104,24 +106,29 @@ class RealisticTrafficOptimizer:
                 
         total_phase_time = used_green + total_overhead
         
-        return uncleared, total_phase_time, wasted_green, used_green, total_overhead, extra_cars_cleared
+        # Round the floats cleanly for the frontend UI
+        return uncleared, int(round(total_phase_time)), int(round(wasted_green)), int(round(used_green)), total_overhead, extra_cars_cleared
 
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! HCM Physics Constraints Live!"})
+        return jsonify({"status": "SUCCESS! Strict Physics Validators Live!"})
 
     try:
         data = request.json
         total_cycles = int(data.get('total_cycles', 50))
-        avg_car_time = int(data.get('avg_car_time', 5))
         
-        arrivals_per_min = data.get('arrivals_per_min', {"North": [10, 25], "South": [10, 25], "East": [15, 35], "West": [15, 35]})
+        # NEW: Supports floats like 2.5, 3.5, etc.
+        avg_car_time = float(data.get('avg_car_time', 2.5)) 
+        
+        arrivals_per_min = data.get('arrivals_per_min', {"North": [1, 5], "South": [1, 5], "East": [2, 8], "West": [2, 8]})
         raw_lanes = data.get('lanes', {"NS": 3, "EW": 3})
         lanes_config = {"NS": max(1, int(raw_lanes.get("NS", 3) or 3)), "EW": max(1, int(raw_lanes.get("EW", 3) or 3))}
         
-        # PHYSICAL CAPACITY VALIDATOR
-        MAX_CARS_PER_MIN_PER_LANE = 32.0 
+        # ==========================================
+        # STRICT PHYSICAL CAPACITY VALIDATOR
+        # ==========================================
+        MAX_CARS_PER_MIN_PER_LANE = 5.0 
         
         for lane in ["North", "South", "East", "West"]:
             lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
@@ -130,15 +137,16 @@ def simulate():
             
             if cars_per_lane > MAX_CARS_PER_MIN_PER_LANE:
                 error_msg = (
-                    f"Physical Space Violation on {lane} bound.\n\n"
-                    f"You requested up to {max_arrival_request} cars/min across {lane_count} lane(s) "
-                    f"({int(cars_per_lane)} cars/min per lane).\n\n"
-                    f"According to the Highway Capacity Manual, the absolute maximum saturation flow rate "
-                    f"is roughly 1,900 vehicles per hour per lane (≈32 cars/min). Entering higher values "
-                    f"requires vehicles to physically overlap.\n\n"
-                    f"Please lower the Arrivals/Min or add more lanes."
+                    f"Traffic Flow Violation on {lane} bound.\n\n"
+                    f"You requested up to {max_arrival_request} vehicles/min across {lane_count} lane(s) "
+                    f"({round(cars_per_lane, 1)} vehicles/min per lane).\n\n"
+                    f"Based on strict urban congestion modeling, the absolute maximum permitted flow rate "
+                    f"is set to {int(MAX_CARS_PER_MIN_PER_LANE)} vehicles per minute per lane. Exceeding this limit "
+                    f"would force vehicles to physically overlap in the simulation.\n\n"
+                    f"Please lower the Arrivals/Min or add more lanes to accommodate this volume."
                 )
                 return jsonify({"error": error_msg}), 400
+        # ==========================================
 
         ev_probs = data.get('ev_probs', {"North": 0.05, "South": 0.05, "East": 0.05, "West": 0.05})
         user_fx_times = data.get('fx_times', {"North": 45, "South": 45, "East": 60, "West": 60})
@@ -202,9 +210,9 @@ def simulate():
                 ev_data = next((ev for ev in active_evs if ev["lane"] == lane), None)
                 if ev_data: 
                     effective_pos = max(1, ev_data["pos_ai"] // lane_count)
-                    alloc = max(alloc, effective_pos * (avg_car_time + 1))
+                    alloc = max(alloc, int(effective_pos * (avg_car_time + 1)))
                 
-                unc, total_used, wst, used_green, overhead, extra_cleared = sim.simulate_lane_traffic(lane, q, alloc, avg_car_time, True, lane_count, arrivals_per_min)
+                unc, total_used, wst, used_green, overhead, extra_cleared = sim.simulate_lane_traffic(lane, q, alloc, avg_car_time, True, lane_count, new_arrivals_ai[lane], ai_cycle_mins)
                 new_arrivals_ai[lane] = max(0, new_arrivals_ai[lane] - extra_cleared)
                 
                 ai_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': total_used, 'wst': wst, 'green': used_green, 'overhead': overhead, 'ev': ev_data}
@@ -220,7 +228,7 @@ def simulate():
                 lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
                 ev_data = next((ev for ev in active_evs if ev["lane"] == lane), None)
                 
-                unc, total_used, wst, used_green, overhead, extra_cleared = sim.simulate_lane_traffic(lane, q, alloc, avg_car_time, False, lane_count, arrivals_per_min)
+                unc, total_used, wst, used_green, overhead, extra_cleared = sim.simulate_lane_traffic(lane, q, alloc, avg_car_time, False, lane_count, new_arrivals_fx[lane], fx_cycle_mins)
                 new_arrivals_fx[lane] = max(0, new_arrivals_fx[lane] - extra_cleared)
                 
                 fx_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': total_used, 'wst': wst, 'green': used_green, 'overhead': overhead, 'ev': ev_data}
@@ -277,11 +285,10 @@ def simulate():
                 sim.fx_total_loss += loss
                 sim.fx_queues[lane] = res['unc']
                 
-                # THE FIX: Restored the proper 4-line calculation for Emergency Vehicle required time!
                 event_fx = ""
                 if res['ev']:
                     lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
-                    req = max(1, res['ev']['pos_fx'] // lane_count) * (avg_car_time + 1)
+                    req = max(1, int(res['ev']['pos_fx'] // lane_count)) * (avg_car_time + 1)
                     event_fx = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_fx']}) " + ("⚠️ Lucky | " if res['alloc'] >= req else "❌ STRANDED! | ")
                 
                 timing_str = "⏭️ Skipped" if res['alloc'] == 0 else f"🟩 {res['alloc']}s (+11s 🚦)"
