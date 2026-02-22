@@ -224,13 +224,20 @@ function DataTable({ data, isDetailedView }: { data: any[], isDetailedView: bool
                   <td className={`px-5 py-3 text-xs text-slate-500 ${isDetailedView ? 'whitespace-normal min-w-[300px]' : 'max-w-[200px] truncate'}`} title={row?.Events}>
                     <div className="font-medium text-slate-700">{row?.Events}</div>
                     
-                    {/* NEW: Explicit details shown ONLY in Detailed View */}
                     {isDetailedView && (
                       <div className="mt-2 flex flex-wrap gap-2 text-[10px] uppercase font-bold text-slate-500 bg-slate-50 p-2 rounded border border-slate-100">
-                        <span className="bg-white px-1.5 py-0.5 rounded border border-slate-200">📥 Arr: {row?.Arrivals}</span>
-                        <span className={`px-1.5 py-0.5 rounded border ${row?.Failed > 0 ? 'bg-red-50 border-red-200 text-red-600' : 'bg-white border-slate-200'}`}>❌ Fail: {row?.Failed}</span>
-                        <span className={`px-1.5 py-0.5 rounded border ${row?.Wasted > 0 ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-slate-200'}`}>🗑️ Wasted: {row?.Wasted}s</span>
-                        <span className="bg-indigo-50 border-indigo-200 text-indigo-600 px-1.5 py-0.5 rounded border">⏳ Pen: {row?.WaitPenalty} pts</span>
+                        <span className="bg-white px-1.5 py-0.5 rounded border border-slate-200">
+                          📥 Arr: {row?.Arrivals ?? '-'}
+                        </span>
+                        <span className={`px-1.5 py-0.5 rounded border ${(row?.Failed || 0) > 0 ? 'bg-red-50 border-red-200 text-red-600' : 'bg-white border-slate-200'}`}>
+                          ❌ Fail: {row?.Failed ?? '-'}
+                        </span>
+                        <span className={`px-1.5 py-0.5 rounded border ${(row?.Wasted || 0) > 0 ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-slate-200'}`}>
+                          🗑️ Wasted: {row?.Wasted ?? '-'}s
+                        </span>
+                        <span className="bg-indigo-50 border-indigo-200 text-indigo-600 px-1.5 py-0.5 rounded border">
+                          ⏳ Pen: {row?.WaitPenalty ?? '-'} pts
+                        </span>
                       </div>
                     )}
                   </td>
