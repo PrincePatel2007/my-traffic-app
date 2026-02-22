@@ -27,11 +27,7 @@ export default function TrafficDashboard() {
       });
       
       const data = await response.json();
-      
-      // ERROR HANDLING: If Python crashed, show the exact error.
-      if (!response.ok || data.error) {
-        throw new Error(data.error || "Server crashed without an error message.");
-      }
+      if (!response.ok || data.error) throw new Error(data.error || "Server crashed.");
       if (!data.ai_logs) throw new Error("Invalid data format received.");
 
       let i = 0;
@@ -48,7 +44,6 @@ export default function TrafficDashboard() {
       
     } catch (error: any) { 
       setIsSimulating(false); 
-      console.error(error);
       alert(`Simulation Failed:\n\n${error.message}`); 
     }
   };
@@ -157,10 +152,12 @@ function TableSection({ title, data, detailed, color }: any) {
                         <div className="flex flex-wrap gap-2 text-[10px] uppercase font-bold text-slate-500 bg-slate-50 p-2 rounded border">
                           <span className="bg-white px-1.5 py-0.5 rounded border">📥 ARR: {row?.Arrivals ?? 0}</span>
                           <span className={`px-1.5 py-0.5 rounded border ${(row?.Failed || 0) > 0 ? 'bg-red-50 text-red-600 border-red-200' : 'bg-white'}`}>❌ FAIL: {row?.Failed ?? 0}</span>
-                          
-                          <span className={`px-1.5 py-0.5 rounded border ${row?.RedTime > 60 ? 'bg-orange-50 text-orange-600 border-orange-200' : 'bg-slate-100'}`}>🛑 RED TIME: {row?.RedTime ?? 0}S</span>
+                          <span className={`px-1.5 py-0.5 rounded border ${row?.RedTime > 60 ? 'bg-orange-50 text-orange-600 border-orange-200' : 'bg-slate-100'}`}>🛑 RED: {row?.RedTime ?? 0}S</span>
                           <span className="bg-sky-50 text-sky-600 px-1.5 py-0.5 rounded border border-sky-200">⏳ WAIT LOSS: {row?.LossWait ?? 0}</span>
                           <span className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-200">💥 FAIL LOSS: {row?.LossFail ?? 0}</span>
+                          
+                          {/* NEW EXPLICIT QUEUE/SPATIAL LOSS BADGE */}
+                          <span className="bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded border border-rose-200">🚗 QUEUE LOSS: {row?.LossQueue ?? 0}</span>
                         </div>
                       </div>
                     )}

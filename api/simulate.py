@@ -7,31 +7,21 @@ app = Flask(__name__)
 class GradientRLAgent:
     def __init__(self, lanes):
         self.lanes = lanes
-        # Neural weights for each lane. The AI updates these via Gradient Descent
         self.weights = {lane: 1.0 for lane in lanes}
         self.learning_rate = 0.01 
 
     def get_action(self, lane, queue, lane_count, avg_car_time):
-        # Forward Pass: Predict optimal time based on current learned weights
         safe_lane_count = max(1, lane_count)
         ideal_base_time = (queue / safe_lane_count) * avg_car_time
         target = ideal_base_time * self.weights[lane]
-        
-        # We always enforce a minimum 15s green and maximum 160s green for safety
         return max(15, min(160, int(target)))
 
     def backpropagate(self, lane, failed_cars, wasted_time):
-        # Backward Pass (Learning): Adjust weights based on the loss gradients
         if failed_cars > 0:
-            # Gradient penalty for failing cars: drastically increase weight to get more time
             self.weights[lane] += self.learning_rate * failed_cars * 1.5
         elif wasted_time > 0:
-            # Gradient penalty for wasting time: decrease weight to shrink green time and save cross-traffic
             self.weights[lane] -= self.learning_rate * (wasted_time / 5.0)
-
-        # Gradient Clipping to prevent the model from exploding
         self.weights[lane] = max(0.5, min(3.0, self.weights[lane]))
-
 
 class RealisticTrafficOptimizer:
     def __init__(self):
@@ -41,11 +31,8 @@ class RealisticTrafficOptimizer:
         self.ai_queues = {lane: 0 for lane in self.lanes}
         self.fx_queues = {lane: 0 for lane in self.lanes}
         self.emergency_cooldowns = {lane: 0 for lane in self.lanes}
-        
-        # THE FIX: Added these two missing loss trackers back in!
         self.ai_total_loss = 0
         self.fx_total_loss = 0
-        
         self.ml_agent = GradientRLAgent(self.lanes)
 
     def generate_arrivals(self, lane, arrival_ranges_per_min, cycle_length_mins):
@@ -53,7 +40,6 @@ class RealisticTrafficOptimizer:
         min_arr = int(arrival_ranges_per_min[lane][0] * cycle_length_mins)
         max_arr = int(arrival_ranges_per_min[lane][1] * cycle_length_mins)
         
-        # Safety net: ensure max is always >= min
         safe_max = max(min_arr, max_arr)
         spike_max = int(safe_max * 1.5) + 1
         
@@ -86,7 +72,7 @@ class RealisticTrafficOptimizer:
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Machine Learning Backend is Live!"})
+        return jsonify({"status": "SUCCESS! ML Backend with Queue Length Penalties is Live!"})
 
     try:
         data = request.json
@@ -95,7 +81,6 @@ def simulate():
         
         arrivals_per_min = data.get('arrivals_per_min', {"North": [10, 25], "South": [10, 25], "East": [15, 35], "West": [15, 35]})
         
-        # IRONCLAD SAFETY: Force lanes to be at least 1, never 0
         raw_lanes = data.get('lanes', {"NS": 3, "EW": 3})
         lanes_config = {
             "NS": max(1, int(raw_lanes.get("NS", 3) or 3)),
@@ -111,8 +96,6 @@ def simulate():
 
         for cycle in range(1, total_cycles + 1):
             sim.fx_times = user_fx_times.copy()
-            
-            # Prevent 0 minute cycles
             total_fx_sum = sum(sim.fx_times.values())
             baseline_cycle_mins = max(0.1, total_fx_sum / 60.0)
 
@@ -181,19 +164,24 @@ def simulate():
                     
                 loss_waiting = res['q'] * penalty_per_car
                 loss_failed = res['unc'] * (red_time * 1.5)
-                total_loss = loss_waiting + loss_failed
+                
+                # NEW: Queue Length Multiplier (Spatial Spillover Penalty)
+                queue_multiplier = 5.0
+                loss_queue = res['q'] * queue_multiplier
+                
+                total_loss = loss_waiting + loss_failed + loss_queue
                 
                 if is_ai:
                     sim.ml_agent.backpropagate(lane, res['unc'], res['wst'])
                     
-                return int(total_loss), int(loss_waiting), int(loss_failed), int(red_time)
+                return int(total_loss), int(loss_waiting), int(loss_failed), int(loss_queue), int(red_time)
 
             # PROCESS AI LOGS
             for phase_step, lane in enumerate(ai_execution_order, 1):
                 res = ai_phase_results[lane]
-                red_time = max(0, total_ai_used_time - res['used']) # Prevent negative red time
+                red_time = max(0, total_ai_used_time - res['used'])
                 
-                loss, l_wait, l_fail, true_red = calculate_exact_loss(lane, res, red_time, True)
+                loss, l_wait, l_fail, l_queue, true_red = calculate_exact_loss(lane, res, red_time, True)
                 sim.ai_total_loss += loss
                 sim.ai_queues[lane] = res['unc']
 
@@ -203,7 +191,8 @@ def simulate():
                 log_data_ai.append({
                     "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": timing_str, 
                     "Queue": str(res['q']), "Cycle Loss": loss, "Events": event_ai,
-                    "Arrivals": new_arrivals[lane], "Failed": res['unc'], "LossWait": l_wait, "LossFail": l_fail, "RedTime": true_red
+                    "Arrivals": new_arrivals[lane], "Failed": res['unc'], 
+                    "LossWait": l_wait, "LossFail": l_fail, "LossQueue": l_queue, "RedTime": true_red
                 })
 
             # PROCESS FIXED LOGS
@@ -211,7 +200,7 @@ def simulate():
                 res = fx_phase_results[lane]
                 red_time = max(0, total_fx_used_time - res['used'])
                 
-                loss, l_wait, l_fail, true_red = calculate_exact_loss(lane, res, red_time, False)
+                loss, l_wait, l_fail, l_queue, true_red = calculate_exact_loss(lane, res, red_time, False)
                 sim.fx_total_loss += loss
                 sim.fx_queues[lane] = res['unc']
 
@@ -224,7 +213,8 @@ def simulate():
                 log_data_fx.append({
                     "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": f"{res['alloc']}s", 
                     "Queue": str(res['q']), "Cycle Loss": loss, "Events": event_fx,
-                    "Arrivals": new_arrivals[lane], "Failed": res['unc'], "LossWait": l_wait, "LossFail": l_fail, "RedTime": true_red
+                    "Arrivals": new_arrivals[lane], "Failed": res['unc'], 
+                    "LossWait": l_wait, "LossFail": l_fail, "LossQueue": l_queue, "RedTime": true_red
                 })
 
             # ==========================================
