@@ -59,27 +59,26 @@ class RealisticTrafficOptimizer:
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Python is alive with Advanced Queuing Penalties!"})
+        return jsonify({"status": "SUCCESS! Python is alive with Advanced EV Tracking!"})
 
     data = request.json
     total_cycles = data.get('total_cycles', 50)
     avg_car_time = data.get('avg_car_time', 5)
     arrival_ranges = data.get('arrival_ranges', {"North": [2, 12], "South": [2, 12], "East": [5, 15], "West": [5, 15]})
     ev_probs = data.get('ev_probs', {"North": 0.05, "South": 0.05, "East": 0.05, "West": 0.05})
+    
+    # NEW: Fetch manual user timings for the Fixed System
+    user_fx_times = data.get('fx_times', {"North": 45, "South": 45, "East": 60, "West": 60})
 
     sim = RealisticTrafficOptimizer()
     log_data_ai = []
     log_data_fx = []
 
-    manual_ns, manual_ew = 45, 60
-
     for cycle in range(1, total_cycles + 1):
         cycle_stats_ai = {}
         
-        sim.fx_times["North"] = manual_ns
-        sim.fx_times["South"] = manual_ns
-        sim.fx_times["East"] = manual_ew
-        sim.fx_times["West"] = manual_ew
+        # Reset Fixed times to user inputs every cycle
+        sim.fx_times = user_fx_times.copy()
         
         if cycle == 1:
             for lane in sim.lanes:
@@ -94,8 +93,8 @@ def simulate():
             sim.ai_queues[lane] += new_cars
             sim.fx_queues[lane] += new_cars
 
-        ev_priorities = {"Ambulance": 1, "Fire": 2, "Police": 3}
-        ev_icons = {"Ambulance": "🚑 Ambulance", "Fire": "🚒 Fire Brigade", "Police": "🚓 Police"}
+        ev_priorities = {"Ambulance": 1, "Fire Truck": 2, "Police Car": 3}
+        ev_icons = {"Ambulance": "🚑", "Fire Truck": "🚒", "Police Car": "🚓"}
         active_evs = []
         
         for lane in sim.lanes:
@@ -155,13 +154,15 @@ def simulate():
             cycle_stats_ai[lane] = {"failed": res['unc'], "wasted": res['wst']}
 
             event_ai = ""
-            if res['ev']: event_ai = f"{res['ev']['icon']} Priority ✅ | "
-            elif sim.emergency_cooldowns[lane] > 0: event_ai = "⚡ Recovery | "
+            if res['ev']: 
+                # NEW: Shows exact EV position in the AI Logs
+                event_ai = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_ai']}) Cleared ✅ | "
+            elif sim.emergency_cooldowns[lane] > 0: 
+                event_ai = "⚡ Recovery | "
 
             timing_str = f"{res['alloc']}s ✂️ Cut to {res['used']}s" if res['used'] < res['alloc'] else f"{res['alloc']}s"
             if res['alloc'] != sim.ai_times[lane]: timing_str = f"🚨 {timing_str}"
 
-            # Added explicit 'AvgWait' to send to frontend
             log_data_ai.append({
                 "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": timing_str, 
                 "Queue": f"🛑 {res['q']} 🚗💥" if res['q'] > 50 else str(res['q']), "Cycle Loss": int(loss), "Events": event_ai,
@@ -188,9 +189,9 @@ def simulate():
             event_fx = ""
             if res['ev']:
                 req = res['ev']['pos_fx'] * (avg_car_time + 1)
-                event_fx = f"{res['ev']['icon']} " + ("⚠️ Lucky Cleared | " if res['alloc'] >= req else "❌ STRANDED! | ")
+                # NEW: Shows exact EV position in the FX Logs
+                event_fx = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_fx']}) " + ("⚠️ Lucky Cleared | " if res['alloc'] >= req else "❌ STRANDED! | ")
 
-            # Added explicit 'AvgWait' to send to frontend
             log_data_fx.append({
                 "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": f"{res['alloc']}s", 
                 "Queue": f"🛑 {res['q']} 🚗💥" if res['q'] > 50 else str(res['q']), "Cycle Loss": int(loss), "Events": event_fx,

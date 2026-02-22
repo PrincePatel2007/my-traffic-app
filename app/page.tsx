@@ -1,10 +1,13 @@
 "use client";
 import React, { useState } from 'react';
-import { Zap, Play, Activity, AlertTriangle, TrendingDown, Clock, Car, Siren, LayoutList, Columns } from 'lucide-react';
+import { Zap, Play, Activity, AlertTriangle, TrendingDown, Clock, Car, Siren, LayoutList, Columns, Timer } from 'lucide-react';
 
 export default function TrafficDashboard() {
   const [totalCycles, setTotalCycles] = useState(50);
   const [avgCarTime, setAvgCarTime] = useState(5);
+  
+  // NEW: Manual Timings for Fixed System
+  const [fxTimes, setFxTimes] = useState({ North: 45, South: 45, East: 60, West: 60 });
   const [arrivals, setArrivals] = useState({ North: [2, 12], South: [2, 12], East: [5, 15], West: [5, 15] });
   const [evProbs, setEvProbs] = useState({ North: 5, South: 5, East: 5, West: 5 });
   
@@ -30,6 +33,7 @@ export default function TrafficDashboard() {
           total_cycles: totalCycles,
           avg_car_time: avgCarTime,
           arrival_ranges: arrivals,
+          fx_times: fxTimes, // NEW: Passing manual timings to Python
           ev_probs: { North: evProbs.North / 100, South: evProbs.South / 100, East: evProbs.East / 100, West: evProbs.West / 100 }
         })
       });
@@ -78,12 +82,13 @@ export default function TrafficDashboard() {
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900 font-sans">
-      <div className="w-80 bg-white border-r border-slate-200 p-6 overflow-y-auto h-screen sticky top-0 shadow-sm z-10 shrink-0">
+      <div className="w-80 bg-white border-r border-slate-200 p-6 overflow-y-auto h-screen sticky top-0 shadow-sm z-10 shrink-0 custom-scrollbar">
         <h2 className="text-2xl font-black flex items-center gap-2 mb-8 text-indigo-600 tracking-tight">
           <Activity className="text-indigo-600" size={28} /> Control Panel
         </h2>
         
-        <div className="space-y-8 text-sm">
+        <div className="space-y-6 text-sm">
+          {/* Top: Total Cycles */}
           <div>
             <label className="flex items-center justify-between font-bold mb-2 text-slate-700">
               <span className="flex items-center gap-2"><Clock size={16} /> Total Cycles</span>
@@ -92,23 +97,40 @@ export default function TrafficDashboard() {
             <input type="range" min="10" max="200" value={totalCycles} onChange={(e) => setTotalCycles(Number(e.target.value))} className="w-full accent-indigo-600" />
           </div>
 
-          <div className="border-t border-slate-100 pt-6">
+          {/* NEW: Manual Fixed Timings */}
+          <div className="border-t border-slate-100 pt-5">
             <h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700">
-              <Car size={16} /> Arrivals per cycle
+              <Timer size={16} className="text-slate-500" /> Manual Timings (s)
+            </h3>
+            <div className="grid grid-cols-2 gap-3">
+              {['North', 'South', 'East', 'West'].map(lane => (
+                <div key={lane} className="flex flex-col">
+                  <label className="text-[10px] uppercase font-bold text-slate-400 mb-1">{lane}</label>
+                  <input type="number" value={(fxTimes as any)[lane]} onChange={(e) => setFxTimes({...fxTimes, [lane]: Number(e.target.value)})} className="border border-slate-300 rounded-md p-1.5 text-center focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-mono font-bold" />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Arrivals Range */}
+          <div className="border-t border-slate-100 pt-5">
+            <h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700">
+              <Car size={16} className="text-slate-500" /> Arrivals Range
             </h3>
             {['North', 'South', 'East', 'West'].map(lane => (
               <div key={lane} className="mb-3 flex items-center justify-between">
-                <label className="block text-xs uppercase font-bold text-slate-500 w-16">{lane}</label>
-                <div className="flex gap-2">
-                  <input type="number" value={(arrivals as any)[lane][0]} onChange={(e) => setArrivals({...arrivals, [lane]: [Number(e.target.value), (arrivals as any)[lane][1]]})} className="w-16 border border-slate-300 rounded-md p-1.5 text-center focus:ring-2 focus:ring-indigo-500 outline-none" />
-                  <span className="text-slate-400 self-center">-</span>
-                  <input type="number" value={(arrivals as any)[lane][1]} onChange={(e) => setArrivals({...arrivals, [lane]: [(arrivals as any)[lane][0], Number(e.target.value)]})} className="w-16 border border-slate-300 rounded-md p-1.5 text-center focus:ring-2 focus:ring-indigo-500 outline-none" />
+                <label className="block text-[10px] uppercase font-bold text-slate-500 w-12">{lane}</label>
+                <div className="flex gap-1">
+                  <input type="number" value={(arrivals as any)[lane][0]} onChange={(e) => setArrivals({...arrivals, [lane]: [Number(e.target.value), (arrivals as any)[lane][1]]})} className="w-14 border border-slate-300 rounded-md p-1.5 text-center focus:ring-2 focus:ring-indigo-500 outline-none text-xs" />
+                  <span className="text-slate-300 self-center">-</span>
+                  <input type="number" value={(arrivals as any)[lane][1]} onChange={(e) => setArrivals({...arrivals, [lane]: [(arrivals as any)[lane][0], Number(e.target.value)]})} className="w-14 border border-slate-300 rounded-md p-1.5 text-center focus:ring-2 focus:ring-indigo-500 outline-none text-xs" />
                 </div>
               </div>
             ))}
           </div>
 
-          <div className="border-t border-slate-100 pt-6">
+          {/* Average Car Time */}
+          <div className="border-t border-slate-100 pt-5">
             <label className="flex items-center justify-between font-bold mb-2 text-slate-700">
               <span>Avg Time / Vehicle</span>
               <span className="bg-slate-100 px-2 py-0.5 rounded text-xs">{avgCarTime}s</span>
@@ -116,10 +138,28 @@ export default function TrafficDashboard() {
             <input type="range" min="2" max="10" value={avgCarTime} onChange={(e) => setAvgCarTime(Number(e.target.value))} className="w-full accent-indigo-600" />
           </div>
 
+          {/* Bottom: EV Probability Sliders */}
+          <div className="border-t border-slate-100 pt-5 pb-2">
+            <div className="bg-red-50 p-4 rounded-xl border border-red-100 shadow-inner">
+              <h3 className="font-black mb-4 flex items-center gap-2 text-red-700 text-sm">
+                <Siren size={18} /> EV Probability (%)
+              </h3>
+              {['North', 'South', 'East', 'West'].map(lane => (
+                <div key={lane} className="mb-3 last:mb-0">
+                  <label className="flex justify-between text-[10px] uppercase font-black text-red-400 mb-1">
+                    <span>{lane}</span>
+                    <span>{(evProbs as any)[lane]}%</span>
+                  </label>
+                  <input type="range" min="0" max="100" value={(evProbs as any)[lane]} onChange={(e) => setEvProbs({...evProbs, [lane]: Number(e.target.value)})} className="w-full accent-red-500" />
+                </div>
+              ))}
+            </div>
+          </div>
+
           <button 
             onClick={runSimulation}
             disabled={isSimulating}
-            className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold hover:bg-slate-800 transition disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md mt-8"
+            className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold hover:bg-slate-800 transition disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md"
           >
             {isSimulating ? (
               <span className="animate-pulse flex items-center gap-2">Simulating ({progress}%)</span>
@@ -227,22 +267,21 @@ function DataTable({ data, isDetailedView }: { data: any[], isDetailedView: bool
                     {isDetailedView && (
                       <div className="mt-2 flex flex-wrap gap-2 text-[10px] uppercase font-bold text-slate-500 bg-slate-50 p-2 rounded border border-slate-100">
                         <span className="bg-white px-1.5 py-0.5 rounded border border-slate-200">
-                          📥 Arrivals: {row?.Arrivals ?? '-'}
+                          📥 ARRIVALS: {row?.Arrivals ?? '-'}
                         </span>
                         <span className={`px-1.5 py-0.5 rounded border ${(row?.Failed || 0) > 0 ? 'bg-red-50 border-red-200 text-red-600' : 'bg-white border-slate-200'}`}>
-                          ❌ Failed: {row?.Failed ?? '-'}
+                          ❌ FAILED: {row?.Failed ?? '-'}
                         </span>
                         <span className={`px-1.5 py-0.5 rounded border ${(row?.Wasted || 0) > 0 ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-slate-200'}`}>
-                          🗑️ Wasted: {row?.Wasted ?? '-'}s
+                          🗑️ WASTED: {row?.Wasted ?? '-'}s
                         </span>
                         
-                        {/* THE NEW AVG WAIT BADGE */}
                         <span className="bg-sky-50 border-sky-200 text-sky-600 px-1.5 py-0.5 rounded border">
-                          ⏱️ Avg Wait: {row?.AvgWait ?? '-'}s
+                          ⏱️ AVG WAIT: {row?.AvgWait ?? '-'}s
                         </span>
                         
                         <span className="bg-indigo-50 border-indigo-200 text-indigo-600 px-1.5 py-0.5 rounded border">
-                          ⏳ Wait Penalty: {row?.WaitPenalty ?? '-'} pts
+                          ⏳ PENALTY: {row?.WaitPenalty ?? '-'} pts
                         </span>
                       </div>
                     )}
