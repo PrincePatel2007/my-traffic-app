@@ -235,6 +235,12 @@ function DataTable({ data, isDetailedView }: { data: any[], isDetailedView: bool
                         <span className={`px-1.5 py-0.5 rounded border ${(row?.Wasted || 0) > 0 ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-slate-200'}`}>
                           🗑️ Wasted: {row?.Wasted ?? '-'}s
                         </span>
+                        
+                        {/* THE NEW AVG WAIT BADGE */}
+                        <span className="bg-sky-50 border-sky-200 text-sky-600 px-1.5 py-0.5 rounded border">
+                          ⏱️ Avg Wait: {row?.AvgWait ?? '-'}s
+                        </span>
+                        
                         <span className="bg-indigo-50 border-indigo-200 text-indigo-600 px-1.5 py-0.5 rounded border">
                           ⏳ Pen: {row?.WaitPenalty ?? '-'} pts
                         </span>
