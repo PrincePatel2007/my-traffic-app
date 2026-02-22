@@ -3,7 +3,6 @@ import React, { useState } from 'react';
 import { Zap, Play, Activity, AlertTriangle, TrendingDown, Clock, Car, Siren, LayoutList, Columns } from 'lucide-react';
 
 export default function TrafficDashboard() {
-  // --- STATE ---
   const [totalCycles, setTotalCycles] = useState(50);
   const [avgCarTime, setAvgCarTime] = useState(5);
   const [arrivals, setArrivals] = useState({ North: [2, 12], South: [2, 12], East: [5, 15], West: [5, 15] });
@@ -14,11 +13,8 @@ export default function TrafficDashboard() {
   const [metrics, setMetrics] = useState({ aiLoss: 0, fxLoss: 0, gain: 0 });
   const [isSimulating, setIsSimulating] = useState(false);
   const [progress, setProgress] = useState(0);
-
-  // --- NEW: Layout Toggle State ---
   const [isDetailedView, setIsDetailedView] = useState(false);
 
-  // --- SIMULATION ENGINE ---
   const runSimulation = async () => {
     setIsSimulating(true);
     setAiLogs([]);
@@ -34,24 +30,17 @@ export default function TrafficDashboard() {
           total_cycles: totalCycles,
           avg_car_time: avgCarTime,
           arrival_ranges: arrivals,
-          ev_probs: {
-            North: evProbs.North / 100,
-            South: evProbs.South / 100,
-            East: evProbs.East / 100,
-            West: evProbs.West / 100
-          }
+          ev_probs: { North: evProbs.North / 100, South: evProbs.South / 100, East: evProbs.East / 100, West: evProbs.West / 100 }
         })
       });
 
       const data = await response.json();
       
-      if (!data.ai_logs || !data.fx_logs) {
-        throw new Error("Invalid data received from Python API.");
-      }
+      if (!data.ai_logs || !data.fx_logs) throw new Error("Invalid data received.");
 
       const maxItems = Math.min(data.ai_logs.length, data.fx_logs.length);
-      
       let i = 0;
+      
       const interval = setInterval(() => {
         try {
           if (i >= maxItems) {
@@ -75,24 +64,20 @@ export default function TrafficDashboard() {
           
           setMetrics({ aiLoss: currentAiLoss, fxLoss: currentFxLoss, gain: currentGain });
           setProgress(Math.round(((i + 1) / maxItems) * 100));
-          
           i++;
         } catch (err) {
-          console.error("Animation rendering error:", err);
           clearInterval(interval);
           setIsSimulating(false);
         }
       }, 100); 
     } catch (error) {
-      console.error("Simulation failed:", error);
       setIsSimulating(false);
-      alert("Error connecting to the Python backend. Make sure the API is running!");
+      alert("Error connecting to the Python backend.");
     }
   };
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900 font-sans">
-      {/* SIDEBAR */}
       <div className="w-80 bg-white border-r border-slate-200 p-6 overflow-y-auto h-screen sticky top-0 shadow-sm z-10 shrink-0">
         <h2 className="text-2xl font-black flex items-center gap-2 mb-8 text-indigo-600 tracking-tight">
           <Activity className="text-indigo-600" size={28} /> Control Panel
@@ -109,7 +94,7 @@ export default function TrafficDashboard() {
 
           <div className="border-t border-slate-100 pt-6">
             <h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700">
-              <Car size={16} /> Arrivals per cycle (Min-Max)
+              <Car size={16} /> Arrivals per cycle
             </h3>
             {['North', 'South', 'East', 'West'].map(lane => (
               <div key={lane} className="mb-3 flex items-center justify-between">
@@ -131,21 +116,6 @@ export default function TrafficDashboard() {
             <input type="range" min="2" max="10" value={avgCarTime} onChange={(e) => setAvgCarTime(Number(e.target.value))} className="w-full accent-indigo-600" />
           </div>
 
-          <div className="border-t border-slate-100 pt-6">
-            <h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700">
-              <Siren size={16} className="text-red-500" /> EV Probability (%)
-            </h3>
-            {['North', 'South', 'East', 'West'].map(lane => (
-              <div key={lane} className="mb-3">
-                <label className="flex justify-between text-xs font-bold text-slate-500 mb-1">
-                  <span>{lane}</span>
-                  <span>{(evProbs as any)[lane]}%</span>
-                </label>
-                <input type="range" min="0" max="100" value={(evProbs as any)[lane]} onChange={(e) => setEvProbs({...evProbs, [lane]: Number(e.target.value)})} className="w-full accent-red-500" />
-              </div>
-            ))}
-          </div>
-
           <button 
             onClick={runSimulation}
             disabled={isSimulating}
@@ -160,7 +130,6 @@ export default function TrafficDashboard() {
         </div>
       </div>
 
-      {/* MAIN DASHBOARD */}
       <div className="flex-1 p-10 overflow-x-hidden">
         <header className="mb-10 flex justify-between items-start">
           <div>
@@ -168,10 +137,9 @@ export default function TrafficDashboard() {
               <Zap size={14} fill="currentColor" /> Parallel Universe Engine
             </div>
             <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">Smart City Traffic AI</h1>
-            <p className="text-slate-500 mt-2 max-w-2xl text-lg">Comparing real-time Adaptive AI Signal Control against Fixed Manual Timers with Emergency Vehicle Preemption.</p>
+            <p className="text-slate-500 mt-2 max-w-2xl text-lg">Comparing real-time Adaptive AI Signal Control against Fixed Manual Timers.</p>
           </div>
           
-          {/* VIEW TOGGLE BUTTON */}
           <button 
             onClick={() => setIsDetailedView(!isDetailedView)}
             className="flex items-center gap-2 bg-white border border-slate-200 px-4 py-2 rounded-lg font-bold text-sm text-slate-700 hover:bg-slate-50 transition shadow-sm"
@@ -191,7 +159,6 @@ export default function TrafficDashboard() {
           <MetricCard title="Total Efficiency Gain" value={`${metrics.gain.toFixed(1)}%`} icon={<TrendingDown size={20} />} color="text-indigo-600" bgColor="bg-indigo-50" borderColor="border-indigo-100" />
         </div>
 
-        {/* DYNAMIC GRID LAYOUT */}
         <div className={`grid gap-8 items-start ${isDetailedView ? 'grid-cols-1' : '2xl:grid-cols-2'}`}>
           <section>
             <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-emerald-700">
@@ -221,11 +188,7 @@ function MetricCard({ title, value, color, bgColor, borderColor, icon, subLabel 
       </div>
       <div className="flex items-end justify-between mt-auto">
         <h3 className={`text-4xl font-black ${color} tracking-tight`}>{value}</h3>
-        {subLabel && (
-          <span className={`text-xs font-bold ${color} ${bgColor} px-2.5 py-1 rounded-full border ${borderColor}`}>
-            {subLabel}
-          </span>
-        )}
+        {subLabel && <span className={`text-xs font-bold ${color} ${bgColor} px-2.5 py-1 rounded-full border ${borderColor}`}>{subLabel}</span>}
       </div>
     </div>
   );
@@ -233,16 +196,11 @@ function MetricCard({ title, value, color, bgColor, borderColor, icon, subLabel 
 
 function DataTable({ data, isDetailedView }: { data: any[], isDetailedView: boolean }) {
   if (!data || data.length === 0) {
-    return (
-      <div className="bg-white border border-slate-200 border-dashed rounded-xl h-64 flex items-center justify-center text-slate-400 font-medium">
-        Awaiting simulation data...
-      </div>
-    );
+    return <div className="bg-white border border-slate-200 border-dashed rounded-xl h-64 flex items-center justify-center text-slate-400 font-medium">Awaiting simulation data...</div>;
   }
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden relative">
-      {/* Scrollable Container so the page doesn't become infinitely long */}
       <div className="overflow-x-auto max-h-[600px] overflow-y-auto custom-scrollbar">
         <table className="w-full text-left text-sm whitespace-nowrap">
           <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold text-xs uppercase tracking-wider sticky top-0 z-10 shadow-sm">
@@ -255,36 +213,32 @@ function DataTable({ data, isDetailedView }: { data: any[], isDetailedView: bool
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {/* Removed the .slice(0, 15) so it shows full history! */}
             {data.map((row, idx) => {
               if (!row) return null; 
-              
               return (
                 <tr key={idx} className="hover:bg-slate-50 transition-colors bg-white animate-in fade-in duration-300">
-                  <td className="px-5 py-3 font-medium text-slate-900">
-                    <span className="text-slate-400 text-xs mr-2">C{row?.Cycle}</span> 
-                    {row?.["Phase Sequence"]}
-                  </td>
-                  <td className="px-5 py-3 font-medium">
-                    {row?.Queue?.toString()?.includes("🛑") ? (
-                      <span className="text-red-600 animate-pulse">{row.Queue}</span>
-                    ) : (
-                      row?.Queue
-                    )}
-                  </td>
+                  <td className="px-5 py-3 font-medium text-slate-900"><span className="text-slate-400 text-xs mr-2">C{row?.Cycle}</span>{row?.["Phase Sequence"]}</td>
+                  <td className="px-5 py-3 font-medium">{row?.Queue?.toString()?.includes("🛑") ? <span className="text-red-600 animate-pulse">{row.Queue}</span> : row?.Queue}</td>
                   <td className="px-5 py-3 font-mono text-indigo-600 text-xs bg-indigo-50/50 rounded">{row?.["Allocated ➡️ Used"]}</td>
                   <td className="px-5 py-3 font-bold text-slate-700 text-right">{row?.["Cycle Loss"]}</td>
                   <td className={`px-5 py-3 text-xs text-slate-500 ${isDetailedView ? 'whitespace-normal min-w-[300px]' : 'max-w-[200px] truncate'}`} title={row?.Events}>
-                    {row?.Events}
+                    <div className="font-medium text-slate-700">{row?.Events}</div>
+                    
+                    {/* NEW: Explicit details shown ONLY in Detailed View */}
+                    {isDetailedView && (
+                      <div className="mt-2 flex flex-wrap gap-2 text-[10px] uppercase font-bold text-slate-500 bg-slate-50 p-2 rounded border border-slate-100">
+                        <span className="bg-white px-1.5 py-0.5 rounded border border-slate-200">📥 Arr: {row?.Arrivals}</span>
+                        <span className={`px-1.5 py-0.5 rounded border ${row?.Failed > 0 ? 'bg-red-50 border-red-200 text-red-600' : 'bg-white border-slate-200'}`}>❌ Fail: {row?.Failed}</span>
+                        <span className={`px-1.5 py-0.5 rounded border ${row?.Wasted > 0 ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-slate-200'}`}>🗑️ Wasted: {row?.Wasted}s</span>
+                        <span className="bg-indigo-50 border-indigo-200 text-indigo-600 px-1.5 py-0.5 rounded border">⏳ Pen: {row?.WaitPenalty} pts</span>
+                      </div>
+                    )}
                   </td>
                 </tr>
               )
             })}
           </tbody>
         </table>
-      </div>
-      <div className="bg-slate-50 text-center py-2 text-xs font-bold text-slate-400 border-t border-slate-200">
-        Showing full simulation history ({data.length} total phases)
       </div>
     </div>
   );
