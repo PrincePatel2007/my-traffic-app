@@ -53,6 +53,7 @@ class RealisticTrafficOptimizer:
         targets = {}
         for l in self.lanes:
             current = self.ai_times[l]
+            # Heuristic keeps AI times balanced based on failed cars and wasted time
             adjust = (stats[l]["failed"] * avg_car_time * 2.0) - (stats[l]["wasted"] * 0.25)
             targets[l] = max(15, min(160, int(current + adjust)))
         return targets
@@ -60,7 +61,7 @@ class RealisticTrafficOptimizer:
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Python is alive!"})
+        return jsonify({"status": "SUCCESS! Python is alive with Advanced Queuing Penalties!"})
 
     data = request.json
     total_cycles = data.get('total_cycles', 50)
@@ -137,14 +138,23 @@ def simulate():
             unc, used, wst = sim.simulate_lane_traffic(q, alloc, avg_car_time, can_cut_early=False)
             fx_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': alloc, 'wst': wst, 'ev': ev_data}
 
-        # 🧠 PHASE 2: APPLY ACCURATE RED-TIME PENALTIES
+        # 🧠 PHASE 2: APPLY WEIGHTED RED-TIME PENALTIES (The Magic Math)
+        
+        # --- PROCESS AI LOGS ---
         for phase_step, lane in enumerate(ai_execution_order, 1):
             res = ai_phase_results[lane]
             red_time = total_ai_used_time - res['used']
-            avg_wait = red_time / 2.0
-            wait_penalty = res['q'] * avg_wait
             
-            loss = res['wst'] + (res['unc'] * red_time) + wait_penalty
+            # SPLIT WAIT PENALTY: Holdovers waited FULL red time. New arrivals waited HALF.
+            holdovers = max(0, res['q'] - new_arrivals[lane])
+            new_cars = new_arrivals[lane]
+            wait_penalty = (holdovers * red_time) + (new_cars * (red_time / 2.0))
+            
+            # WEIGHTED PENALTIES
+            weighted_wasted = res['wst'] * 5              # Wasted time is punished 5x
+            uncleared_penalty = res['unc'] * (red_time * 1.5) # Uncleared cars punished 1.5x Red Time
+
+            loss = weighted_wasted + uncleared_penalty + wait_penalty
             sim.ai_total_loss += loss
             sim.ai_queues[lane] = res['unc']
             cycle_stats_ai[lane] = {"failed": res['unc'], "wasted": res['wst']}
@@ -152,7 +162,7 @@ def simulate():
             event_ai = ""
             if res['ev']: event_ai = f"{res['ev']['icon']} EVP ✅ | "
             elif sim.emergency_cooldowns[lane] > 0: event_ai = "⚡ Recovery | "
-            event_ai += f"Avg Wait: {int(avg_wait)}s"
+            event_ai += f"Wait Pen: {int(wait_penalty)} pts"
 
             timing_str = f"{res['alloc']}s ✂️ Cut to {res['used']}s" if res['used'] < res['alloc'] else f"{res['alloc']}s"
             if res['alloc'] != sim.ai_times[lane]: timing_str = f"🚨 {timing_str}"
@@ -163,13 +173,21 @@ def simulate():
                 "Arrivals": new_arrivals[lane], "Failed": res['unc'], "Wasted": res['wst'], "WaitPenalty": int(wait_penalty)
             })
 
+        # --- PROCESS FIXED LOGS ---
         for phase_step, lane in enumerate(fx_execution_order, 1):
             res = fx_phase_results[lane]
             red_time = total_fx_used_time - res['used']
-            avg_wait = red_time / 2.0
-            wait_penalty = res['q'] * avg_wait
             
-            loss = res['wst'] + (res['unc'] * red_time) + wait_penalty
+            # SPLIT WAIT PENALTY: Holdovers waited FULL red time. New arrivals waited HALF.
+            holdovers = max(0, res['q'] - new_arrivals[lane])
+            new_cars = new_arrivals[lane]
+            wait_penalty = (holdovers * red_time) + (new_cars * (red_time / 2.0))
+            
+            # WEIGHTED PENALTIES
+            weighted_wasted = res['wst'] * 5              # Wasted time is punished 5x
+            uncleared_penalty = res['unc'] * (red_time * 1.5) # Uncleared cars punished 1.5x Red Time
+            
+            loss = weighted_wasted + uncleared_penalty + wait_penalty
             sim.fx_total_loss += loss
             sim.fx_queues[lane] = res['unc']
 
@@ -177,7 +195,7 @@ def simulate():
             if res['ev']:
                 req = res['ev']['pos_fx'] * (avg_car_time + 1)
                 event_fx = f"{res['ev']['icon']} " + ("⚠️ Lucky Cleared | " if res['alloc'] >= req else "❌ STRANDED! | ")
-            event_fx += f"Avg Wait: {int(avg_wait)}s"
+            event_fx += f"Wait Pen: {int(wait_penalty)} pts"
 
             log_data_fx.append({
                 "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": f"{res['alloc']}s", 
@@ -185,6 +203,7 @@ def simulate():
                 "Arrivals": new_arrivals[lane], "Failed": res['unc'], "Wasted": res['wst'], "WaitPenalty": int(wait_penalty)
             })
 
+        # Update AI Timings
         target_times = sim.ask_gemini_for_targets(cycle_stats_ai, avg_car_time)
         is_any_recovering = any(c > 0 for c in sim.emergency_cooldowns.values())
         for lane in sim.lanes:
