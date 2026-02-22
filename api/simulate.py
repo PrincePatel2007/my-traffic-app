@@ -15,12 +15,22 @@ class GradientRLAgent:
             return 0 
             
         safe_lane_count = max(1, lane_count)
-        ideal_base_time = (queue / safe_lane_count) * avg_car_time
+        cars_per_lane = queue / safe_lane_count
+        
+        # =======================================================
+        # ARTERIAL FLUSHING: 
+        # If a lane exceeds 10 cars per lane, it is in a Gridlock State.
+        # We give it a 1.5x time multiplier to flush the massive wave. 
+        # This will naturally force the AI to sacrifice the cross-streets (dropping them to 3s).
+        # =======================================================
+        if cars_per_lane > 10.0:
+            ideal_base_time = cars_per_lane * avg_car_time * 1.5
+        else:
+            ideal_base_time = cars_per_lane * avg_car_time
+            
         target = ideal_base_time * self.weights[lane]
         
-        # CALCULATED SACRIFICE: Dropped the 10s safety net. 
-        # If the AI wants to starve a lane to save the global loss function, 
-        # it only has to give enough time for exactly 1 car to pass (to prevent driver aggression).
+        # Allow micro-phases for calculated sacrifices (enough time for 1 car)
         min_green = max(3, int(avg_car_time)) 
         return max(min_green, int(round(target)))
 
@@ -73,7 +83,14 @@ class RealisticTrafficOptimizer:
         if queue > 50:
             max_possible_clearance = int((allocated_green / avg_car_time) * safe_lane_count)
             cleared_cars = min(queue, max_possible_clearance)
-            time_spent_moving = (cleared_cars / safe_lane_count) * avg_car_time
+            
+            # STRAGGLER FLUSH
+            if 0 < (queue - cleared_cars) <= safe_lane_count:
+                cleared_cars = queue
+                time_spent_moving = (cleared_cars / safe_lane_count) * avg_car_time
+                allocated_green = max(allocated_green, time_spent_moving)
+            else:
+                time_spent_moving = (cleared_cars / safe_lane_count) * avg_car_time
         else:
             time_spent_moving = 0.0
             cleared_cars = 0
@@ -83,6 +100,11 @@ class RealisticTrafficOptimizer:
                     cleared_cars += min(safe_lane_count, queue - cleared_cars)
                     time_spent_moving += car_time
                 else:
+                    uncleared_temp = queue - cleared_cars
+                    if uncleared_temp <= safe_lane_count:
+                        cleared_cars += uncleared_temp
+                        time_spent_moving += car_time
+                        allocated_green = max(allocated_green, time_spent_moving)
                     break 
         
         uncleared = queue - cleared_cars
@@ -100,7 +122,7 @@ class RealisticTrafficOptimizer:
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Calculated Sacrifice Physics Live!"})
+        return jsonify({"status": "SUCCESS! Arterial Flushing Live!"})
 
     try:
         data = request.json
