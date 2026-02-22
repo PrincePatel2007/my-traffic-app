@@ -1,14 +1,16 @@
 "use client";
 import React, { useState } from 'react';
-import { Zap, Play, Activity, AlertTriangle, TrendingDown, Clock, Car, Siren, LayoutList, Columns, Timer } from 'lucide-react';
+import { Zap, Play, Activity, AlertTriangle, TrendingDown, Clock, Car, Siren, LayoutList, Columns, Timer, GitMerge } from 'lucide-react';
 
 export default function TrafficDashboard() {
   const [totalCycles, setTotalCycles] = useState(50);
   const [avgCarTime, setAvgCarTime] = useState(5);
   
-  // NEW: Manual Timings for Fixed System
+  // NEW STATES
+  const [lanes, setLanes] = useState({ NS: 3, EW: 3 });
+  const [arrivalsPerMin, setArrivalsPerMin] = useState({ North: [10, 25], South: [10, 25], East: [15, 35], West: [15, 35] });
+  
   const [fxTimes, setFxTimes] = useState({ North: 45, South: 45, East: 60, West: 60 });
-  const [arrivals, setArrivals] = useState({ North: [2, 12], South: [2, 12], East: [5, 15], West: [5, 15] });
   const [evProbs, setEvProbs] = useState({ North: 5, South: 5, East: 5, West: 5 });
   
   const [aiLogs, setAiLogs] = useState<any[]>([]);
@@ -32,8 +34,9 @@ export default function TrafficDashboard() {
         body: JSON.stringify({
           total_cycles: totalCycles,
           avg_car_time: avgCarTime,
-          arrival_ranges: arrivals,
-          fx_times: fxTimes, // NEW: Passing manual timings to Python
+          arrivals_per_min: arrivalsPerMin, // NEW: Sending per minute bounds
+          lanes: lanes, // NEW: Sending lanes config
+          fx_times: fxTimes,
           ev_probs: { North: evProbs.North / 100, South: evProbs.South / 100, East: evProbs.East / 100, West: evProbs.West / 100 }
         })
       });
@@ -97,7 +100,7 @@ export default function TrafficDashboard() {
             <input type="range" min="10" max="200" value={totalCycles} onChange={(e) => setTotalCycles(Number(e.target.value))} className="w-full accent-indigo-600" />
           </div>
 
-          {/* NEW: Manual Fixed Timings */}
+          {/* Manual Fixed Timings */}
           <div className="border-t border-slate-100 pt-5">
             <h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700">
               <Timer size={16} className="text-slate-500" /> Manual Timings (s)
@@ -112,18 +115,18 @@ export default function TrafficDashboard() {
             </div>
           </div>
 
-          {/* Arrivals Range */}
+          {/* Arrivals Range PER MINUTE */}
           <div className="border-t border-slate-100 pt-5">
             <h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700">
-              <Car size={16} className="text-slate-500" /> Arrivals Range
+              <Car size={16} className="text-slate-500" /> Arrivals / Minute
             </h3>
             {['North', 'South', 'East', 'West'].map(lane => (
               <div key={lane} className="mb-3 flex items-center justify-between">
                 <label className="block text-[10px] uppercase font-bold text-slate-500 w-12">{lane}</label>
                 <div className="flex gap-1">
-                  <input type="number" value={(arrivals as any)[lane][0]} onChange={(e) => setArrivals({...arrivals, [lane]: [Number(e.target.value), (arrivals as any)[lane][1]]})} className="w-14 border border-slate-300 rounded-md p-1.5 text-center focus:ring-2 focus:ring-indigo-500 outline-none text-xs" />
+                  <input type="number" value={(arrivalsPerMin as any)[lane][0]} onChange={(e) => setArrivalsPerMin({...arrivalsPerMin, [lane]: [Number(e.target.value), (arrivalsPerMin as any)[lane][1]]})} className="w-14 border border-slate-300 rounded-md p-1.5 text-center focus:ring-2 focus:ring-indigo-500 outline-none text-xs" />
                   <span className="text-slate-300 self-center">-</span>
-                  <input type="number" value={(arrivals as any)[lane][1]} onChange={(e) => setArrivals({...arrivals, [lane]: [(arrivals as any)[lane][0], Number(e.target.value)]})} className="w-14 border border-slate-300 rounded-md p-1.5 text-center focus:ring-2 focus:ring-indigo-500 outline-none text-xs" />
+                  <input type="number" value={(arrivalsPerMin as any)[lane][1]} onChange={(e) => setArrivalsPerMin({...arrivalsPerMin, [lane]: [(arrivalsPerMin as any)[lane][0], Number(e.target.value)]})} className="w-14 border border-slate-300 rounded-md p-1.5 text-center focus:ring-2 focus:ring-indigo-500 outline-none text-xs" />
                 </div>
               </div>
             ))}
@@ -136,6 +139,23 @@ export default function TrafficDashboard() {
               <span className="bg-slate-100 px-2 py-0.5 rounded text-xs">{avgCarTime}s</span>
             </label>
             <input type="range" min="2" max="10" value={avgCarTime} onChange={(e) => setAvgCarTime(Number(e.target.value))} className="w-full accent-indigo-600" />
+          </div>
+
+          {/* NEW: Number of Lanes config */}
+          <div className="border-t border-slate-100 pt-5">
+            <h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700">
+              <GitMerge size={16} className="text-slate-500" /> Number of Lanes
+            </h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col">
+                <label className="text-[10px] uppercase font-bold text-slate-400 mb-1">North / South</label>
+                <input type="number" min="1" max="6" value={lanes.NS} onChange={(e) => setLanes({...lanes, NS: Number(e.target.value)})} className="border border-slate-300 rounded-md p-1.5 text-center focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-bold" />
+              </div>
+              <div className="flex flex-col">
+                <label className="text-[10px] uppercase font-bold text-slate-400 mb-1">East / West</label>
+                <input type="number" min="1" max="6" value={lanes.EW} onChange={(e) => setLanes({...lanes, EW: Number(e.target.value)})} className="border border-slate-300 rounded-md p-1.5 text-center focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-bold" />
+              </div>
+            </div>
           </div>
 
           {/* Bottom: EV Probability Sliders */}
@@ -275,11 +295,9 @@ function DataTable({ data, isDetailedView }: { data: any[], isDetailedView: bool
                         <span className={`px-1.5 py-0.5 rounded border ${(row?.Wasted || 0) > 0 ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-slate-200'}`}>
                           🗑️ WASTED: {row?.Wasted ?? '-'}s
                         </span>
-                        
                         <span className="bg-sky-50 border-sky-200 text-sky-600 px-1.5 py-0.5 rounded border">
                           ⏱️ AVG WAIT: {row?.AvgWait ?? '-'}s
                         </span>
-                        
                         <span className="bg-indigo-50 border-indigo-200 text-indigo-600 px-1.5 py-0.5 rounded border">
                           ⏳ PENALTY: {row?.WaitPenalty ?? '-'} pts
                         </span>
