@@ -1,6 +1,6 @@
 "use client";
 import React, { useState } from 'react';
-import { Zap, Play, Activity, AlertTriangle, TrendingDown, Clock, Car, Siren } from 'lucide-react';
+import { Zap, Play, Activity, AlertTriangle, TrendingDown, Clock, Car, Siren, LayoutList, Columns } from 'lucide-react';
 
 export default function TrafficDashboard() {
   // --- STATE ---
@@ -14,6 +14,9 @@ export default function TrafficDashboard() {
   const [metrics, setMetrics] = useState({ aiLoss: 0, fxLoss: 0, gain: 0 });
   const [isSimulating, setIsSimulating] = useState(false);
   const [progress, setProgress] = useState(0);
+
+  // --- NEW: Layout Toggle State ---
+  const [isDetailedView, setIsDetailedView] = useState(false);
 
   // --- SIMULATION ENGINE ---
   const runSimulation = async () => {
@@ -42,18 +45,15 @@ export default function TrafficDashboard() {
 
       const data = await response.json();
       
-      // Safety check to ensure arrays exist
       if (!data.ai_logs || !data.fx_logs) {
         throw new Error("Invalid data received from Python API.");
       }
 
-      // Find the exact limit to prevent Out-Of-Bounds array crashes
       const maxItems = Math.min(data.ai_logs.length, data.fx_logs.length);
       
       let i = 0;
       const interval = setInterval(() => {
         try {
-          // If we hit the end of the arrays, cleanly stop the animation
           if (i >= maxItems) {
             clearInterval(interval);
             setIsSimulating(false);
@@ -64,13 +64,11 @@ export default function TrafficDashboard() {
           const aiRow = data.ai_logs[i];
           const fxRow = data.fx_logs[i];
 
-          // Safely prepend the new row
           if (aiRow && fxRow) {
             setAiLogs(prev => [aiRow, ...prev]);
             setFxLogs(prev => [fxRow, ...prev]);
           }
           
-          // Calculate live metrics safely
           const currentAiLoss = data.ai_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
           const currentFxLoss = data.fx_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
           const currentGain = currentFxLoss > 0 ? ((currentFxLoss - currentAiLoss) / currentFxLoss) * 100 : 0;
@@ -95,7 +93,7 @@ export default function TrafficDashboard() {
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900 font-sans">
       {/* SIDEBAR */}
-      <div className="w-80 bg-white border-r border-slate-200 p-6 overflow-y-auto h-screen sticky top-0 shadow-sm z-10">
+      <div className="w-80 bg-white border-r border-slate-200 p-6 overflow-y-auto h-screen sticky top-0 shadow-sm z-10 shrink-0">
         <h2 className="text-2xl font-black flex items-center gap-2 mb-8 text-indigo-600 tracking-tight">
           <Activity className="text-indigo-600" size={28} /> Control Panel
         </h2>
@@ -164,12 +162,26 @@ export default function TrafficDashboard() {
 
       {/* MAIN DASHBOARD */}
       <div className="flex-1 p-10 overflow-x-hidden">
-        <header className="mb-10">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-sm font-bold mb-4">
-            <Zap size={14} fill="currentColor" /> Parallel Universe Engine
+        <header className="mb-10 flex justify-between items-start">
+          <div>
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-sm font-bold mb-4">
+              <Zap size={14} fill="currentColor" /> Parallel Universe Engine
+            </div>
+            <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">Smart City Traffic AI</h1>
+            <p className="text-slate-500 mt-2 max-w-2xl text-lg">Comparing real-time Adaptive AI Signal Control against Fixed Manual Timers with Emergency Vehicle Preemption.</p>
           </div>
-          <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">Smart City Traffic AI</h1>
-          <p className="text-slate-500 mt-2 max-w-2xl text-lg">Comparing real-time Adaptive AI Signal Control against Fixed Manual Timers with Emergency Vehicle Preemption.</p>
+          
+          {/* VIEW TOGGLE BUTTON */}
+          <button 
+            onClick={() => setIsDetailedView(!isDetailedView)}
+            className="flex items-center gap-2 bg-white border border-slate-200 px-4 py-2 rounded-lg font-bold text-sm text-slate-700 hover:bg-slate-50 transition shadow-sm"
+          >
+            {isDetailedView ? (
+              <><Columns size={16} className="text-indigo-600"/> Side-by-Side View</>
+            ) : (
+              <><LayoutList size={16} className="text-indigo-600"/> Detailed Stacked View</>
+            )}
+          </button>
         </header>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
@@ -179,19 +191,20 @@ export default function TrafficDashboard() {
           <MetricCard title="Total Efficiency Gain" value={`${metrics.gain.toFixed(1)}%`} icon={<TrendingDown size={20} />} color="text-indigo-600" bgColor="bg-indigo-50" borderColor="border-indigo-100" />
         </div>
 
-        <div className="grid 2xl:grid-cols-2 gap-8 items-start">
+        {/* DYNAMIC GRID LAYOUT */}
+        <div className={`grid gap-8 items-start ${isDetailedView ? 'grid-cols-1' : '2xl:grid-cols-2'}`}>
           <section>
             <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-emerald-700">
               <span className="bg-emerald-100 p-1.5 rounded-lg"><Zap size={18} /></span> AI Optimized Log
             </h2>
-            <DataTable data={aiLogs} />
+            <DataTable data={aiLogs} isDetailedView={isDetailedView} />
           </section>
 
           <section>
             <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-slate-700">
               <span className="bg-slate-200 p-1.5 rounded-lg"><Clock size={18} /></span> Fixed Manual Log
             </h2>
-            <DataTable data={fxLogs} />
+            <DataTable data={fxLogs} isDetailedView={isDetailedView} />
           </section>
         </div>
       </div>
@@ -218,7 +231,7 @@ function MetricCard({ title, value, color, bgColor, borderColor, icon, subLabel 
   );
 }
 
-function DataTable({ data }: { data: any[] }) {
+function DataTable({ data, isDetailedView }: { data: any[], isDetailedView: boolean }) {
   if (!data || data.length === 0) {
     return (
       <div className="bg-white border border-slate-200 border-dashed rounded-xl h-64 flex items-center justify-center text-slate-400 font-medium">
@@ -229,20 +242,21 @@ function DataTable({ data }: { data: any[] }) {
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden relative">
-      <div className="overflow-x-auto">
+      {/* Scrollable Container so the page doesn't become infinitely long */}
+      <div className="overflow-x-auto max-h-[600px] overflow-y-auto custom-scrollbar">
         <table className="w-full text-left text-sm whitespace-nowrap">
-          <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold text-xs uppercase tracking-wider sticky top-0">
+          <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold text-xs uppercase tracking-wider sticky top-0 z-10 shadow-sm">
             <tr>
               <th className="px-5 py-4">Phase</th>
               <th className="px-5 py-4">Queue</th>
               <th className="px-5 py-4">Timing (Alloc ➡️ Used)</th>
               <th className="px-5 py-4 text-right">Loss</th>
-              <th className="px-5 py-4">Events</th>
+              <th className="px-5 py-4">Events & Details</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {data.slice(0, 15).map((row, idx) => {
-              // Extra safety boundary: Ignore broken rows
+            {/* Removed the .slice(0, 15) so it shows full history! */}
+            {data.map((row, idx) => {
               if (!row) return null; 
               
               return (
@@ -252,7 +266,6 @@ function DataTable({ data }: { data: any[] }) {
                     {row?.["Phase Sequence"]}
                   </td>
                   <td className="px-5 py-3 font-medium">
-                    {/* Optional chaining on string parsing prevents crashes */}
                     {row?.Queue?.toString()?.includes("🛑") ? (
                       <span className="text-red-600 animate-pulse">{row.Queue}</span>
                     ) : (
@@ -261,7 +274,7 @@ function DataTable({ data }: { data: any[] }) {
                   </td>
                   <td className="px-5 py-3 font-mono text-indigo-600 text-xs bg-indigo-50/50 rounded">{row?.["Allocated ➡️ Used"]}</td>
                   <td className="px-5 py-3 font-bold text-slate-700 text-right">{row?.["Cycle Loss"]}</td>
-                  <td className="px-5 py-3 text-xs text-slate-500 max-w-[200px] truncate" title={row?.Events}>
+                  <td className={`px-5 py-3 text-xs text-slate-500 ${isDetailedView ? 'whitespace-normal min-w-[300px]' : 'max-w-[200px] truncate'}`} title={row?.Events}>
                     {row?.Events}
                   </td>
                 </tr>
@@ -270,11 +283,9 @@ function DataTable({ data }: { data: any[] }) {
           </tbody>
         </table>
       </div>
-      {data.length > 15 && (
-        <div className="bg-slate-50 text-center py-2 text-xs font-bold text-slate-400 border-t border-slate-200">
-          Showing 15 most recent phases ({data.length} total)
-        </div>
-      )}
+      <div className="bg-slate-50 text-center py-2 text-xs font-bold text-slate-400 border-t border-slate-200">
+        Showing full simulation history ({data.length} total phases)
+      </div>
     </div>
   );
 }
