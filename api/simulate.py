@@ -11,7 +11,6 @@ class GradientRLAgent:
         self.learning_rate = 0.01 
 
     def get_action(self, lane, queue, lane_count, avg_car_time):
-        # 1. PERFECT SKIP: If exactly 0 cars, skip the phase entirely to save the 11s overhead.
         if queue == 0:
             return 0 
             
@@ -19,8 +18,6 @@ class GradientRLAgent:
         ideal_base_time = (queue / safe_lane_count) * avg_car_time
         target = ideal_base_time * self.weights[lane]
         
-        # 2. ANTI-AGGRESSION MINIMUM: If even 1 car is waiting, we force a minimum green time 
-        # (10 seconds or enough for 2 cars) so drivers don't get furious and run the red light.
         min_green = max(10, avg_car_time * 2) 
         return max(min_green, min(160, int(round(target))))
 
@@ -97,7 +94,7 @@ class RealisticTrafficOptimizer:
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Anti-Aggression Minimum Green is Live!"})
+        return jsonify({"status": "SUCCESS! Split Wait Math & Pre-Arrival Fix Live!"})
 
     try:
         data = request.json
@@ -124,6 +121,7 @@ def simulate():
             new_arrivals_ai = {}
             new_arrivals_fx = {}
             
+            # 1. ADD NEW ARRIVALS FIRST
             for lane in sim.lanes:
                 ai_cars = sim.generate_arrivals(lane, arrivals_per_min, ai_cycle_mins)
                 new_arrivals_ai[lane] = ai_cars
@@ -132,6 +130,17 @@ def simulate():
                 fx_cars = sim.generate_arrivals(lane, arrivals_per_min, fx_cycle_mins)
                 new_arrivals_fx[lane] = fx_cars
                 sim.fx_queues[lane] += fx_cars
+
+            # 2. PREDICT AI ACTION BASED ON THE ACTUAL NEW QUEUE (Fixes the 0s Blindspot!)
+            for lane in sim.lanes:
+                lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
+                target_time = sim.ml_agent.get_action(lane, sim.ai_queues[lane], lane_count, avg_car_time)
+                
+                if sim.emergency_cooldowns[lane] > 0:
+                    target_time += 15
+                    sim.emergency_cooldowns[lane] -= 1
+                    
+                sim.ai_times[lane] = target_time
 
             ev_priorities = {"Ambulance": 1, "Fire Truck": 2, "Police Car": 3}
             ev_icons = {"Ambulance": "🚑", "Fire Truck": "🚒", "Police Car": "🚓"}
@@ -188,17 +197,23 @@ def simulate():
             def calculate_exact_loss(lane, res, red_time, is_ai, current_new_arrivals):
                 effective_fail_red = max(45, red_time)
                 
-                avg_wait = red_time / 2.0
-                if red_time <= 60:
-                    penalty_per_car = avg_wait
-                else:
-                    penalty_per_car = avg_wait + ((red_time - 60) * 1.25)
+                holdovers = max(0, res['q'] - current_new_arrivals[lane])
+                new_arrived = current_new_arrivals[lane]
+                
+                # NEW: SPLIT MATH FOR HOLDOVERS VS NEW ARRIVALS
+                penalty_holdover = red_time        # Full Red Time
+                penalty_new = red_time / 2.0       # Half Red Time
+                
+                # Escalation logic for > 60s wait
+                if red_time > 60:
+                    escalation = (red_time - 60) * 1.25
+                    penalty_holdover += escalation
+                    penalty_new += escalation
                     
-                loss_waiting = res['q'] * penalty_per_car
+                loss_waiting = (holdovers * penalty_holdover) + (new_arrived * penalty_new)
+                
                 loss_failed = res['unc'] * (effective_fail_red * 1.5)
                 loss_queue = res['q'] * 5.0
-                
-                holdovers = max(0, res['q'] - current_new_arrivals[lane])
                 loss_starve = (holdovers ** 2) * 5.0 
                 
                 total_loss = loss_waiting + loss_failed + loss_queue + loss_starve
@@ -255,21 +270,11 @@ def simulate():
                     timing_str = f"🟩 {res['alloc']}s (+11s 🚦)"
 
                 log_data_fx.append({
-                    "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": timing_str, 
+                    "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": f"{res['alloc']}s", 
                     "Queue": str(res['q']), "Cycle Loss": loss, "Events": event_fx,
                     "Arrivals": new_arrivals_fx[lane], "Failed": res['unc'], "Wasted": res['wst'],
                     "LossWait": l_wait, "LossFail": l_fail, "LossQueue": l_queue, "LossStarve": l_starve, "RedTime": true_red
                 })
-
-            for lane in sim.lanes:
-                lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
-                target_time = sim.ml_agent.get_action(lane, sim.ai_queues[lane], lane_count, avg_car_time)
-                
-                if sim.emergency_cooldowns[lane] > 0:
-                    target_time += 15
-                    sim.emergency_cooldowns[lane] -= 1
-                    
-                sim.ai_times[lane] = target_time
 
         return jsonify({"ai_logs": log_data_ai, "fx_logs": log_data_fx})
         

@@ -13,12 +13,12 @@ export default function TrafficDashboard() {
   
   const [aiLogs, setAiLogs] = useState<any[]>([]);
   const [fxLogs, setFxLogs] = useState<any[]>([]);
-  const [metrics, setMetrics] = useState({ aiLoss: 0, fxLoss: 0, gain: 0, isEvaluating: false });
+  const [metrics, setMetrics] = useState({ aiLoss: 0, fxLoss: 0, gain: 0 });
   const [isSimulating, setIsSimulating] = useState(false);
   const [isDetailedView, setIsDetailedView] = useState(false);
 
   const runSimulation = async () => {
-    setIsSimulating(true); setAiLogs([]); setFxLogs([]); setMetrics({ aiLoss: 0, fxLoss: 0, gain: 0, isEvaluating: false });
+    setIsSimulating(true); setAiLogs([]); setFxLogs([]); setMetrics({ aiLoss: 0, fxLoss: 0, gain: 0 });
     
     try {
       const response = await fetch('/api/simulate', {
@@ -30,7 +30,6 @@ export default function TrafficDashboard() {
       if (!response.ok || data.error) throw new Error(data.error || "Server crashed.");
       if (!data.ai_logs) throw new Error("Invalid data format received.");
 
-      const evalStartIdx = Math.floor(data.ai_logs.length * 0.8);
       let i = 0;
       
       const interval = setInterval(() => {
@@ -38,16 +37,11 @@ export default function TrafficDashboard() {
         setAiLogs(prev => [data.ai_logs[i], ...prev]);
         setFxLogs(prev => [data.fx_logs[i], ...prev]);
         
-        const isEval = i >= evalStartIdx;
-        let aiL = 0;
-        let fxL = 0;
+        // RESTORED: Calculating exactly from Cycle 1 to reflect real-world loss!
+        const aiL = data.ai_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
+        const fxL = data.fx_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
         
-        if (isEval) {
-            aiL = data.ai_logs.slice(evalStartIdx, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
-            fxL = data.fx_logs.slice(evalStartIdx, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
-        }
-        
-        setMetrics({ aiLoss: aiL, fxLoss: fxL, gain: fxL > 0 ? ((fxL - aiL) / fxL) * 100 : 0, isEvaluating: isEval });
+        setMetrics({ aiLoss: aiL, fxLoss: fxL, gain: fxL > 0 ? ((fxL - aiL) / fxL) * 100 : 0 });
         i++;
       }, 100); 
       
@@ -99,9 +93,9 @@ export default function TrafficDashboard() {
         </header>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
-          <MetricCard title="Fixed Inefficiency (Eval Phase)" value={metrics.isEvaluating ? metrics.fxLoss.toLocaleString() : "Training..."} icon={<AlertTriangle size={20} />} color={metrics.isEvaluating ? "text-red-600" : "text-slate-400"} bgColor={metrics.isEvaluating ? "bg-red-50" : "bg-slate-100"} />
-          <MetricCard title="ML Inefficiency (Eval Phase)" value={metrics.isEvaluating ? metrics.aiLoss.toLocaleString() : "Training..."} icon={<Zap size={20} />} color={metrics.isEvaluating ? "text-emerald-600" : "text-slate-400"} bgColor={metrics.isEvaluating ? "bg-emerald-50" : "bg-slate-100"} subLabel={metrics.isEvaluating ? `Saved ${Math.max(0, metrics.fxLoss - metrics.aiLoss).toLocaleString()} pts` : "Learning Environment"} />
-          <MetricCard title="Total Gain (Eval Phase)" value={metrics.isEvaluating ? `${metrics.gain.toFixed(1)}%` : "---"} icon={<TrendingDown size={20} />} color={metrics.isEvaluating ? "text-indigo-600" : "text-slate-400"} bgColor={metrics.isEvaluating ? "bg-indigo-50" : "bg-slate-100"} />
+          <MetricCard title="Fixed Inefficiency" value={metrics.fxLoss.toLocaleString()} icon={<AlertTriangle size={20} />} color="text-red-600" bgColor="bg-red-50" />
+          <MetricCard title="ML System Inefficiency" value={metrics.aiLoss.toLocaleString()} icon={<Zap size={20} />} color="text-emerald-600" bgColor="bg-emerald-50" subLabel={`Saved ${Math.max(0, metrics.fxLoss - metrics.aiLoss).toLocaleString()} pts`} />
+          <MetricCard title="Total Gain" value={`${metrics.gain.toFixed(1)}%`} icon={<TrendingDown size={20} />} color="text-indigo-600" bgColor="bg-indigo-50" />
         </div>
 
         <div className={`grid gap-8 items-start ${isDetailedView ? 'grid-cols-1' : '2xl:grid-cols-2'}`}>
@@ -156,7 +150,6 @@ function TableSection({ title, data, detailed, color }: any) {
                           <span className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-200">💥 FAIL LOSS: {row?.LossFail ?? 0}</span>
                           <span className="bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded border border-rose-200">🚗 QUEUE LOSS: {row?.LossQueue ?? 0}</span>
                           
-                          {/* THE NEW STARVATION PENALTY UI */}
                           {row?.LossStarve > 0 && (
                             <span className="bg-red-600 text-white px-1.5 py-0.5 rounded shadow-sm animate-pulse">🚨 STARVED: {row?.LossStarve} PTS</span>
                           )}
