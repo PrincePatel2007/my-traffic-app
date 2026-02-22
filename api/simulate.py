@@ -19,17 +19,28 @@ class GradientRLAgent:
         target = ideal_base_time * self.weights[lane]
         
         min_green = max(10, int(avg_car_time * 2)) 
-        return max(min_green, min(160, int(round(target))))
+        
+        # FIX 1: Max green time strictly capped at 90s. 
+        # 160s single-phases cause mathematical death spirals on the cross-streets!
+        return max(min_green, min(90, int(round(target))))
 
     def backpropagate(self, lane, failed_cars, wasted_time, holdovers):
+        # FIX 2: Smoothed out the panic surges so weights don't skyrocket instantly
         if holdovers > 0:
-            self.weights[lane] += self.learning_rate * min(30, holdovers) * 1.0
+            self.weights[lane] += self.learning_rate * min(20, holdovers) * 0.2
         elif failed_cars > 0:
-            self.weights[lane] += self.learning_rate * min(20, failed_cars) * 0.4
+            self.weights[lane] += self.learning_rate * min(10, failed_cars) * 0.1
         elif wasted_time > 0:
-            self.weights[lane] -= self.learning_rate * (wasted_time / 5.0)
+            self.weights[lane] -= self.learning_rate * (wasted_time / 2.0)
+        else:
+            # FIX 3: BELT TIGHTENING (Mean Reversion). 
+            # If the AI cleared the queue perfectly, slightly shrink the weight!
+            # This forces the AI to constantly seek tighter, faster timings instead of getting lazy.
+            self.weights[lane] -= self.learning_rate * 0.1
 
-        self.weights[lane] = max(0.1, min(5.0, self.weights[lane]))
+        # FIX 4: Sane boundaries. 5.0 was way too high. 2.0 means the AI can ask for 200% 
+        # of the ideal mathematical time, which is plenty of safety buffer!
+        self.weights[lane] = max(0.5, min(2.0, self.weights[lane]))
 
 
 class RealisticTrafficOptimizer:
@@ -67,21 +78,18 @@ class RealisticTrafficOptimizer:
         
         safe_lane_count = max(1, lane_count)
         
-        # EXACT USER LOGIC: Calculate actual rolling arrivals per minute per lane for THIS specific cycle
         arrival_per_min_per_lane = (actual_arrivals / cycle_mins) / safe_lane_count if cycle_mins > 0 else 0
         
-        # Only allow trimming if the incoming wave is 2 cars or less per minute per lane
         is_continuous_flow = arrival_per_min_per_lane > 2.0
         
-        if can_cut_early: # If the AI wants to cut early
+        if can_cut_early: 
             if is_continuous_flow:
-                can_cut_early = False # Revoke permission, traffic is too continuous!
+                can_cut_early = False 
             
         time_spent_moving = 0.0
         cleared_cars = 0
         
         while cleared_cars < queue:
-            # Using random.uniform to support fractional seconds (e.g. 2.5s)
             car_time = random.uniform(max(0.5, avg_car_time - 0.5), avg_car_time + 0.5)
             if time_spent_moving + car_time <= allocated_green:
                 cleared_cars += min(safe_lane_count, queue - cleared_cars)
@@ -106,28 +114,22 @@ class RealisticTrafficOptimizer:
                 
         total_phase_time = used_green + total_overhead
         
-        # Round the floats cleanly for the frontend UI
         return uncleared, int(round(total_phase_time)), int(round(wasted_green)), int(round(used_green)), total_overhead, extra_cars_cleared
 
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Strict Physics Validators Live!"})
+        return jsonify({"status": "SUCCESS! Weight Decay (Belt Tightening) Live!"})
 
     try:
         data = request.json
         total_cycles = int(data.get('total_cycles', 50))
-        
-        # NEW: Supports floats like 2.5, 3.5, etc.
         avg_car_time = float(data.get('avg_car_time', 2.5)) 
         
         arrivals_per_min = data.get('arrivals_per_min', {"North": [1, 5], "South": [1, 5], "East": [2, 8], "West": [2, 8]})
         raw_lanes = data.get('lanes', {"NS": 3, "EW": 3})
         lanes_config = {"NS": max(1, int(raw_lanes.get("NS", 3) or 3)), "EW": max(1, int(raw_lanes.get("EW", 3) or 3))}
         
-        # ==========================================
-        # STRICT PHYSICAL CAPACITY VALIDATOR
-        # ==========================================
         MAX_CARS_PER_MIN_PER_LANE = 5.0 
         
         for lane in ["North", "South", "East", "West"]:
@@ -146,7 +148,6 @@ def simulate():
                     f"Please lower the Arrivals/Min or add more lanes to accommodate this volume."
                 )
                 return jsonify({"error": error_msg}), 400
-        # ==========================================
 
         ev_probs = data.get('ev_probs', {"North": 0.05, "South": 0.05, "East": 0.05, "West": 0.05})
         user_fx_times = data.get('fx_times', {"North": 45, "South": 45, "East": 60, "West": 60})
