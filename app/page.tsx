@@ -24,7 +24,6 @@ export default function TrafficDashboard() {
     setMetrics({ aiLoss: 0, fxLoss: 0, gain: 0 });
 
     try {
-      // Call the Python Flask Backend
       const response = await fetch('/api/simulate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -43,27 +42,49 @@ export default function TrafficDashboard() {
 
       const data = await response.json();
       
-      // Animate playback to mimic Streamlit's real-time loop
+      // Safety check to ensure arrays exist
+      if (!data.ai_logs || !data.fx_logs) {
+        throw new Error("Invalid data received from Python API.");
+      }
+
+      // Find the exact limit to prevent Out-Of-Bounds array crashes
+      const maxItems = Math.min(data.ai_logs.length, data.fx_logs.length);
+      
       let i = 0;
       const interval = setInterval(() => {
-        if (i < data.ai_logs.length) {
-          // Add the newest row to the top of the list
-          setAiLogs(prev => [data.ai_logs[i], ...prev]);
-          setFxLogs(prev => [data.fx_logs[i], ...prev]);
+        try {
+          // If we hit the end of the arrays, cleanly stop the animation
+          if (i >= maxItems) {
+            clearInterval(interval);
+            setIsSimulating(false);
+            setProgress(100);
+            return;
+          }
+
+          const aiRow = data.ai_logs[i];
+          const fxRow = data.fx_logs[i];
+
+          // Safely prepend the new row
+          if (aiRow && fxRow) {
+            setAiLogs(prev => [aiRow, ...prev]);
+            setFxLogs(prev => [fxRow, ...prev]);
+          }
           
-          // Calculate running totals
-          const currentAiLoss = data.ai_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + row["Cycle Loss"], 0);
-          const currentFxLoss = data.fx_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + row["Cycle Loss"], 0);
+          // Calculate live metrics safely
+          const currentAiLoss = data.ai_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
+          const currentFxLoss = data.fx_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
           const currentGain = currentFxLoss > 0 ? ((currentFxLoss - currentAiLoss) / currentFxLoss) * 100 : 0;
           
           setMetrics({ aiLoss: currentAiLoss, fxLoss: currentFxLoss, gain: currentGain });
-          setProgress(Math.round(((i + 1) / data.ai_logs.length) * 100));
+          setProgress(Math.round(((i + 1) / maxItems) * 100));
+          
           i++;
-        } else {
+        } catch (err) {
+          console.error("Animation rendering error:", err);
           clearInterval(interval);
           setIsSimulating(false);
         }
-      }, 100); // 100ms delay between rows feels fast and impressive
+      }, 100); 
     } catch (error) {
       console.error("Simulation failed:", error);
       setIsSimulating(false);
@@ -80,7 +101,6 @@ export default function TrafficDashboard() {
         </h2>
         
         <div className="space-y-8 text-sm">
-          {/* Simulation Length */}
           <div>
             <label className="flex items-center justify-between font-bold mb-2 text-slate-700">
               <span className="flex items-center gap-2"><Clock size={16} /> Total Cycles</span>
@@ -89,7 +109,6 @@ export default function TrafficDashboard() {
             <input type="range" min="10" max="200" value={totalCycles} onChange={(e) => setTotalCycles(Number(e.target.value))} className="w-full accent-indigo-600" />
           </div>
 
-          {/* Traffic Volumes */}
           <div className="border-t border-slate-100 pt-6">
             <h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700">
               <Car size={16} /> Arrivals per cycle (Min-Max)
@@ -106,7 +125,6 @@ export default function TrafficDashboard() {
             ))}
           </div>
 
-          {/* Avg Car Time */}
           <div className="border-t border-slate-100 pt-6">
             <label className="flex items-center justify-between font-bold mb-2 text-slate-700">
               <span>Avg Time / Vehicle</span>
@@ -115,7 +133,6 @@ export default function TrafficDashboard() {
             <input type="range" min="2" max="10" value={avgCarTime} onChange={(e) => setAvgCarTime(Number(e.target.value))} className="w-full accent-indigo-600" />
           </div>
 
-          {/* Emergency Probabilities */}
           <div className="border-t border-slate-100 pt-6">
             <h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700">
               <Siren size={16} className="text-red-500" /> EV Probability (%)
@@ -131,7 +148,6 @@ export default function TrafficDashboard() {
             ))}
           </div>
 
-          {/* Action Button */}
           <button 
             onClick={runSimulation}
             disabled={isSimulating}
@@ -156,7 +172,6 @@ export default function TrafficDashboard() {
           <p className="text-slate-500 mt-2 max-w-2xl text-lg">Comparing real-time Adaptive AI Signal Control against Fixed Manual Timers with Emergency Vehicle Preemption.</p>
         </header>
 
-        {/* METRICS ROW */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
           <MetricCard title="Fixed System Inefficiency" value={metrics.fxLoss.toLocaleString()} icon={<AlertTriangle size={20} />} color="text-red-600" bgColor="bg-red-50" borderColor="border-red-100" />
           <MetricCard title="AI System Inefficiency" value={metrics.aiLoss.toLocaleString()} icon={<Zap size={20} />} color="text-emerald-600" bgColor="bg-emerald-50" borderColor="border-emerald-100"
@@ -164,7 +179,6 @@ export default function TrafficDashboard() {
           <MetricCard title="Total Efficiency Gain" value={`${metrics.gain.toFixed(1)}%`} icon={<TrendingDown size={20} />} color="text-indigo-600" bgColor="bg-indigo-50" borderColor="border-indigo-100" />
         </div>
 
-        {/* DATA TABLES */}
         <div className="grid 2xl:grid-cols-2 gap-8 items-start">
           <section>
             <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-emerald-700">
@@ -186,7 +200,6 @@ export default function TrafficDashboard() {
 }
 
 // --- SUB-COMPONENTS ---
-
 function MetricCard({ title, value, color, bgColor, borderColor, icon, subLabel }: any) {
   return (
     <div className={`p-6 rounded-2xl shadow-sm border ${borderColor} bg-white flex flex-col`}>
@@ -206,7 +219,7 @@ function MetricCard({ title, value, color, bgColor, borderColor, icon, subLabel 
 }
 
 function DataTable({ data }: { data: any[] }) {
-  if (data.length === 0) {
+  if (!data || data.length === 0) {
     return (
       <div className="bg-white border border-slate-200 border-dashed rounded-xl h-64 flex items-center justify-center text-slate-400 font-medium">
         Awaiting simulation data...
@@ -228,27 +241,32 @@ function DataTable({ data }: { data: any[] }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {/* Show only the latest 15 rows to keep UI snappy */}
-            {data.slice(0, 15).map((row, idx) => (
-              <tr key={idx} className="hover:bg-slate-50 transition-colors bg-white animate-in fade-in duration-300">
-                <td className="px-5 py-3 font-medium text-slate-900">
-                  <span className="text-slate-400 text-xs mr-2">C{row.Cycle}</span> 
-                  {row["Phase Sequence"]}
-                </td>
-                <td className="px-5 py-3 font-medium">
-                  {row.Queue.toString().includes("🛑") ? (
-                    <span className="text-red-600 animate-pulse">{row.Queue}</span>
-                  ) : (
-                    row.Queue
-                  )}
-                </td>
-                <td className="px-5 py-3 font-mono text-indigo-600 text-xs bg-indigo-50/50 rounded">{row["Allocated ➡️ Used"]}</td>
-                <td className="px-5 py-3 font-bold text-slate-700 text-right">{row["Cycle Loss"]}</td>
-                <td className="px-5 py-3 text-xs text-slate-500 max-w-[200px] truncate" title={row.Events}>
-                  {row.Events}
-                </td>
-              </tr>
-            ))}
+            {data.slice(0, 15).map((row, idx) => {
+              // Extra safety boundary: Ignore broken rows
+              if (!row) return null; 
+              
+              return (
+                <tr key={idx} className="hover:bg-slate-50 transition-colors bg-white animate-in fade-in duration-300">
+                  <td className="px-5 py-3 font-medium text-slate-900">
+                    <span className="text-slate-400 text-xs mr-2">C{row?.Cycle}</span> 
+                    {row?.["Phase Sequence"]}
+                  </td>
+                  <td className="px-5 py-3 font-medium">
+                    {/* Optional chaining on string parsing prevents crashes */}
+                    {row?.Queue?.toString()?.includes("🛑") ? (
+                      <span className="text-red-600 animate-pulse">{row.Queue}</span>
+                    ) : (
+                      row?.Queue
+                    )}
+                  </td>
+                  <td className="px-5 py-3 font-mono text-indigo-600 text-xs bg-indigo-50/50 rounded">{row?.["Allocated ➡️ Used"]}</td>
+                  <td className="px-5 py-3 font-bold text-slate-700 text-right">{row?.["Cycle Loss"]}</td>
+                  <td className="px-5 py-3 text-xs text-slate-500 max-w-[200px] truncate" title={row?.Events}>
+                    {row?.Events}
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
