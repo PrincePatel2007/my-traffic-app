@@ -11,7 +11,7 @@ class GradientRLAgent:
         self.learning_rate = 0.01 
 
     def get_action(self, lane, queue, lane_count, avg_car_time):
-        # If the lane is empty, the AI can still skip it entirely (0s)
+        # 1. PERFECT SKIP: If exactly 0 cars, skip the phase entirely to save the 11s overhead.
         if queue == 0:
             return 0 
             
@@ -19,10 +19,12 @@ class GradientRLAgent:
         ideal_base_time = (queue / safe_lane_count) * avg_car_time
         target = ideal_base_time * self.weights[lane]
         
-        return max(5, min(160, int(round(target))))
+        # 2. ANTI-AGGRESSION MINIMUM: If even 1 car is waiting, we force a minimum green time 
+        # (10 seconds or enough for 2 cars) so drivers don't get furious and run the red light.
+        min_green = max(10, avg_car_time * 2) 
+        return max(min_green, min(160, int(round(target))))
 
     def backpropagate(self, lane, failed_cars, wasted_time, holdovers):
-        # We cranked up the panic response. If cars are starved, the AI violently course-corrects!
         if holdovers > 0:
             self.weights[lane] += self.learning_rate * min(30, holdovers) * 1.0
         elif failed_cars > 0:
@@ -58,14 +60,13 @@ class RealisticTrafficOptimizer:
         return random.randint(safe_max, spike_max) if prob < 0.10 else random.randint(min_arr, safe_max)
 
     def simulate_lane_traffic(self, queue, allocated_green, avg_car_time, can_cut_early, lane_count):
-        # NEW: Phase Transition Overhead (Yellow + All Red + Startup)
         if allocated_green == 0:
-            return queue, 0, 0, 0, 0 # Completely skipped, no overhead!
+            return queue, 0, 0, 0, 0 
             
         overhead_yellow = 5
         overhead_safety_red = 3
         overhead_startup = 3
-        total_overhead = overhead_yellow + overhead_safety_red + overhead_startup # 11 seconds dead time
+        total_overhead = overhead_yellow + overhead_safety_red + overhead_startup
         
         time_spent_moving = 0
         cleared_cars = 0
@@ -88,7 +89,6 @@ class RealisticTrafficOptimizer:
             used_green = allocated_green
             wasted_green = allocated_green - time_spent_moving if uncleared == 0 else 0
                 
-        # Total time cost to the intersection = The green time used + the 11s transition overhead
         total_phase_time = used_green + total_overhead
         
         return uncleared, total_phase_time, wasted_green, used_green, total_overhead
@@ -97,7 +97,7 @@ class RealisticTrafficOptimizer:
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Phase Overhead Penalty Live!"})
+        return jsonify({"status": "SUCCESS! Anti-Aggression Minimum Green is Live!"})
 
     try:
         data = request.json
@@ -199,8 +199,6 @@ def simulate():
                 loss_queue = res['q'] * 5.0
                 
                 holdovers = max(0, res['q'] - current_new_arrivals[lane])
-                
-                # CRITICAL UPDATE: Starvation penalty is much harsher to prevent AI from eating the penalty
                 loss_starve = (holdovers ** 2) * 5.0 
                 
                 total_loss = loss_waiting + loss_failed + loss_queue + loss_starve
@@ -221,9 +219,8 @@ def simulate():
 
                 event_ai = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_ai']}) ✅ | " if res['ev'] else ("⚡ Recovery | " if sim.emergency_cooldowns[lane] > 0 else "")
                 
-                # NEW UI FORMATTING: Explicitly showing the 11s switch overhead
                 if res['alloc'] == 0:
-                    timing_str = "⏭️ Skipped"
+                    timing_str = "⏭️ Skipped (Empty)"
                 else:
                     if res['green'] < res['alloc']:
                         timing_str = f"🟩 {res['alloc']}s ✂️ {res['green']}s (+11s 🚦)"
