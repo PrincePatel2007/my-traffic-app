@@ -13,12 +13,14 @@ export default function TrafficDashboard() {
   
   const [aiLogs, setAiLogs] = useState<any[]>([]);
   const [fxLogs, setFxLogs] = useState<any[]>([]);
-  const [metrics, setMetrics] = useState({ aiLoss: 0, fxLoss: 0, gain: 0 });
+  
+  // NEW: Added isEvaluating flag to track when the last 20% starts
+  const [metrics, setMetrics] = useState({ aiLoss: 0, fxLoss: 0, gain: 0, isEvaluating: false });
   const [isSimulating, setIsSimulating] = useState(false);
   const [isDetailedView, setIsDetailedView] = useState(false);
 
   const runSimulation = async () => {
-    setIsSimulating(true); setAiLogs([]); setFxLogs([]); setMetrics({ aiLoss: 0, fxLoss: 0, gain: 0 });
+    setIsSimulating(true); setAiLogs([]); setFxLogs([]); setMetrics({ aiLoss: 0, fxLoss: 0, gain: 0, isEvaluating: false });
     
     try {
       const response = await fetch('/api/simulate', {
@@ -30,15 +32,31 @@ export default function TrafficDashboard() {
       if (!response.ok || data.error) throw new Error(data.error || "Server crashed.");
       if (!data.ai_logs) throw new Error("Invalid data format received.");
 
+      // THE FIX: Calculate exactly where the final 20% of cycles begins
+      const evalStartIdx = Math.floor(data.ai_logs.length * 0.8);
       let i = 0;
+      
       const interval = setInterval(() => {
         if (i >= data.ai_logs.length) { clearInterval(interval); setIsSimulating(false); return; }
         setAiLogs(prev => [data.ai_logs[i], ...prev]);
         setFxLogs(prev => [data.fx_logs[i], ...prev]);
         
-        const aiL = data.ai_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
-        const fxL = data.fx_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
-        setMetrics({ aiLoss: aiL, fxLoss: fxL, gain: fxL > 0 ? ((fxL - aiL) / fxL) * 100 : 0 });
+        const isEval = i >= evalStartIdx;
+        let aiL = 0;
+        let fxL = 0;
+        
+        // ONLY accumulate the loss if we are in the Evaluation Phase (Last 20%)
+        if (isEval) {
+            aiL = data.ai_logs.slice(evalStartIdx, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
+            fxL = data.fx_logs.slice(evalStartIdx, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
+        }
+        
+        setMetrics({ 
+            aiLoss: aiL, 
+            fxLoss: fxL, 
+            gain: fxL > 0 ? ((fxL - aiL) / fxL) * 100 : 0,
+            isEvaluating: isEval 
+        });
         i++;
       }, 100); 
       
@@ -100,9 +118,29 @@ export default function TrafficDashboard() {
         </header>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
-          <MetricCard title="Fixed Inefficiency" value={metrics.fxLoss.toLocaleString()} icon={<AlertTriangle size={20} />} color="text-red-600" bgColor="bg-red-50" />
-          <MetricCard title="ML System Inefficiency" value={metrics.aiLoss.toLocaleString()} icon={<Zap size={20} />} color="text-emerald-600" bgColor="bg-emerald-50" subLabel={`Saved ${Math.max(0, metrics.fxLoss - metrics.aiLoss).toLocaleString()} pts`} />
-          <MetricCard title="Total Gain" value={`${metrics.gain.toFixed(1)}%`} icon={<TrendingDown size={20} />} color="text-indigo-600" bgColor="bg-indigo-50" />
+          {/* NEW: Dynamic Metric Cards based on Training vs Evaluation Phase */}
+          <MetricCard 
+            title="Fixed Inefficiency (Eval Phase)" 
+            value={metrics.isEvaluating ? metrics.fxLoss.toLocaleString() : "Training..."} 
+            icon={<AlertTriangle size={20} />} 
+            color={metrics.isEvaluating ? "text-red-600" : "text-slate-400"} 
+            bgColor={metrics.isEvaluating ? "bg-red-50" : "bg-slate-100"} 
+          />
+          <MetricCard 
+            title="ML Inefficiency (Eval Phase)" 
+            value={metrics.isEvaluating ? metrics.aiLoss.toLocaleString() : "Training..."} 
+            icon={<Zap size={20} />} 
+            color={metrics.isEvaluating ? "text-emerald-600" : "text-slate-400"} 
+            bgColor={metrics.isEvaluating ? "bg-emerald-50" : "bg-slate-100"} 
+            subLabel={metrics.isEvaluating ? `Saved ${Math.max(0, metrics.fxLoss - metrics.aiLoss).toLocaleString()} pts` : "Learning Environment"} 
+          />
+          <MetricCard 
+            title="Total Gain (Eval Phase)" 
+            value={metrics.isEvaluating ? `${metrics.gain.toFixed(1)}%` : "---"} 
+            icon={<TrendingDown size={20} />} 
+            color={metrics.isEvaluating ? "text-indigo-600" : "text-slate-400"} 
+            bgColor={metrics.isEvaluating ? "bg-indigo-50" : "bg-slate-100"} 
+          />
         </div>
 
         <div className={`grid gap-8 items-start ${isDetailedView ? 'grid-cols-1' : '2xl:grid-cols-2'}`}>
@@ -116,7 +154,7 @@ export default function TrafficDashboard() {
 
 function MetricCard({ title, value, color, bgColor, icon, subLabel }: any) {
   return (
-    <div className={`p-6 rounded-2xl shadow-sm border bg-white flex flex-col`}>
+    <div className={`p-6 rounded-2xl shadow-sm border bg-white flex flex-col transition-all duration-300`}>
       <div className="flex items-center gap-2 text-slate-500 mb-3 font-semibold text-sm uppercase">{React.cloneElement(icon, { className: color })} {title}</div>
       <div className="flex items-end justify-between mt-auto">
         <h3 className={`text-4xl font-black ${color}`}>{value}</h3>
@@ -152,11 +190,11 @@ function TableSection({ title, data, detailed, color }: any) {
                         <div className="flex flex-wrap gap-2 text-[10px] uppercase font-bold text-slate-500 bg-slate-50 p-2 rounded border">
                           <span className="bg-white px-1.5 py-0.5 rounded border">📥 ARR: {row?.Arrivals ?? 0}</span>
                           <span className={`px-1.5 py-0.5 rounded border ${(row?.Failed || 0) > 0 ? 'bg-red-50 text-red-600 border-red-200' : 'bg-white'}`}>❌ FAIL: {row?.Failed ?? 0}</span>
+                          
                           <span className={`px-1.5 py-0.5 rounded border ${row?.RedTime > 60 ? 'bg-orange-50 text-orange-600 border-orange-200' : 'bg-slate-100'}`}>🛑 RED: {row?.RedTime ?? 0}S</span>
                           <span className="bg-sky-50 text-sky-600 px-1.5 py-0.5 rounded border border-sky-200">⏳ WAIT LOSS: {row?.LossWait ?? 0}</span>
                           <span className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-200">💥 FAIL LOSS: {row?.LossFail ?? 0}</span>
                           
-                          {/* NEW EXPLICIT QUEUE/SPATIAL LOSS BADGE */}
                           <span className="bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded border border-rose-200">🚗 QUEUE LOSS: {row?.LossQueue ?? 0}</span>
                         </div>
                       </div>
