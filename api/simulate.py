@@ -11,17 +11,27 @@ class GradientRLAgent:
         self.learning_rate = 0.01 
 
     def get_action(self, lane, queue, lane_count, avg_car_time):
+        # 1. ABSOLUTE PHASE SKIPPING: If no cars, exactly 0 seconds.
+        if queue == 0:
+            return 0
+            
         safe_lane_count = max(1, lane_count)
         ideal_base_time = (queue / safe_lane_count) * avg_car_time
         target = ideal_base_time * self.weights[lane]
-        return max(15, min(160, int(target)))
+        
+        # 2. CALCULATED SACRIFICE: Removed the 15s minimum. The AI can now assign 0s, 3s, etc. 
+        # to intentionally strand cars if its learned weight demands it.
+        return max(0, min(160, int(target)))
 
     def backpropagate(self, lane, failed_cars, wasted_time):
         if failed_cars > 0:
             self.weights[lane] += self.learning_rate * failed_cars * 1.5
         elif wasted_time > 0:
             self.weights[lane] -= self.learning_rate * (wasted_time / 5.0)
-        self.weights[lane] = max(0.5, min(3.0, self.weights[lane]))
+
+        # 3. UNLEASHED GRADIENT: Dropped the minimum weight to 0.1 so the AI can aggressively starve a lane
+        self.weights[lane] = max(0.1, min(3.0, self.weights[lane]))
+
 
 class RealisticTrafficOptimizer:
     def __init__(self):
@@ -72,7 +82,7 @@ class RealisticTrafficOptimizer:
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! ML Backend with Queue Length Penalties is Live!"})
+        return jsonify({"status": "SUCCESS! Calculated Sacrifice AI is Live!"})
 
     try:
         data = request.json
@@ -135,6 +145,7 @@ def simulate():
                 
                 ev_data = next((ev for ev in active_evs if ev["lane"] == lane), None)
                 if ev_data: 
+                    # EV safety override: Even if alloc is 0, we force enough time to clear the EV!
                     effective_pos = max(1, ev_data["pos_ai"] // lane_count)
                     alloc = max(alloc, effective_pos * (avg_car_time + 1))
                 
@@ -165,7 +176,6 @@ def simulate():
                 loss_waiting = res['q'] * penalty_per_car
                 loss_failed = res['unc'] * (red_time * 1.5)
                 
-                # NEW: Queue Length Multiplier (Spatial Spillover Penalty)
                 queue_multiplier = 5.0
                 loss_queue = res['q'] * queue_multiplier
                 
@@ -225,6 +235,7 @@ def simulate():
                 target_time = sim.ml_agent.get_action(lane, sim.ai_queues[lane], lane_count, avg_car_time)
                 
                 if sim.emergency_cooldowns[lane] > 0:
+                    # Give an extra buffer for post-emergency clearance
                     target_time += 15
                     sim.emergency_cooldowns[lane] -= 1
                     
