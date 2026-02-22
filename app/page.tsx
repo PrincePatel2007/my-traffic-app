@@ -1,18 +1,13 @@
 "use client";
 import React, { useState } from 'react';
-import { Zap, Activity, AlertTriangle, TrendingDown, Clock, Car, Siren, LayoutList, Columns, Timer, GitMerge } from 'lucide-react';
+import { Zap, Activity, AlertTriangle, TrendingDown, Clock, Car, Siren, LayoutList, Columns, Timer, GitMerge, Gauge } from 'lucide-react';
 
 export default function TrafficDashboard() {
   const [totalCycles, setTotalCycles] = useState(50);
-  
-  // NEW: Updated to start at a valid float (2.5s)
   const [avgCarTime, setAvgCarTime] = useState(2.5);
-  
   const [lanes, setLanes] = useState({ NS: 3, EW: 3 });
   
-  // NEW: Adjusted default traffic so it starts well under the 5 car/min/lane limit
-  const [arrivalsPerMin, setArrivalsPerMin] = useState({ North: [2, 10], South: [2, 10], East: [3, 12], West: [3, 12] });
-  
+  const [arrivalsPerMin, setArrivalsPerMin] = useState({ North: [1, 4], South: [1, 4], East: [2, 5], West: [2, 5] });
   const [fxTimes, setFxTimes] = useState({ North: 45, South: 45, East: 60, West: 60 });
   const [evProbs, setEvProbs] = useState({ North: 5, South: 5, East: 5, West: 5 });
   
@@ -23,27 +18,31 @@ export default function TrafficDashboard() {
   const [isDetailedView, setIsDetailedView] = useState(false);
   const [simError, setSimError] = useState<string | null>(null);
 
-  const runSimulation = async () => {
-    setIsSimulating(true); 
-    setAiLogs([]); 
-    setFxLogs([]); 
-    setMetrics({ aiLoss: 0, fxLoss: 0, gain: 0 });
-    setSimError(null);
+  const calculateCapacity = () => {
+    const totalAvgArrivals = 
+      ((arrivalsPerMin.North[0] + arrivalsPerMin.North[1]) / 2) +
+      ((arrivalsPerMin.South[0] + arrivalsPerMin.South[1]) / 2) +
+      ((arrivalsPerMin.East[0] + arrivalsPerMin.East[1]) / 2) +
+      ((arrivalsPerMin.West[0] + arrivalsPerMin.West[1]) / 2);
     
+    // Theoretical max clearance based on standard 120s cycle minus 44s dead time (63% efficiency)
+    const maxClearancePerMin = (60 / avgCarTime) * 0.63; 
+    const saturationRatio = (totalAvgArrivals / maxClearancePerMin) * 100;
+    
+    return { ratio: saturationRatio, limit: maxClearancePerMin, demand: totalAvgArrivals };
+  };
+
+  const cap = calculateCapacity();
+
+  const runSimulation = async () => {
+    setIsSimulating(true); setAiLogs([]); setFxLogs([]); setMetrics({ aiLoss: 0, fxLoss: 0, gain: 0 }); setSimError(null);
     try {
       const response = await fetch('/api/simulate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ total_cycles: totalCycles, avg_car_time: avgCarTime, arrivals_per_min: arrivalsPerMin, lanes: lanes, fx_times: fxTimes, ev_probs: { North: evProbs.North / 100, South: evProbs.South / 100, East: evProbs.East / 100, West: evProbs.West / 100 } })
       });
-      
       const data = await response.json();
-      
-      if (!response.ok || data.error) {
-          setSimError(data.error || "Simulation failed.");
-          setIsSimulating(false);
-          return;
-      }
-      
+      if (!response.ok || data.error) { setSimError(data.error || "Simulation failed."); setIsSimulating(false); return; }
       if (!data.ai_logs) throw new Error("Invalid data format received.");
 
       let i = 0;
@@ -54,21 +53,30 @@ export default function TrafficDashboard() {
         
         const aiL = data.ai_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
         const fxL = data.fx_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
-        
         setMetrics({ aiLoss: aiL, fxLoss: fxL, gain: fxL > 0 ? ((fxL - aiL) / fxL) * 100 : 0 });
         i++;
       }, 100); 
-      
-    } catch (error: any) { 
-      setIsSimulating(false); 
-      setSimError(error.message); 
-    }
+    } catch (error: any) { setIsSimulating(false); setSimError(error.message); }
   };
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900 font-sans">
       <div className="w-80 bg-white border-r border-slate-200 p-6 overflow-y-auto h-screen sticky top-0 shadow-sm z-10 shrink-0 custom-scrollbar">
         <h2 className="text-2xl font-black flex items-center gap-2 mb-8 text-indigo-600 tracking-tight"><Activity size={28} /> Control Panel</h2>
+        
+        <div className={`mb-6 p-4 rounded-xl border ${cap.ratio > 100 ? 'bg-red-50 border-red-200' : cap.ratio > 80 ? 'bg-orange-50 border-orange-200' : 'bg-emerald-50 border-emerald-200'}`}>
+            <h3 className={`font-black flex items-center gap-2 mb-2 text-sm ${cap.ratio > 100 ? 'text-red-700' : cap.ratio > 80 ? 'text-orange-700' : 'text-emerald-700'}`}>
+                <Gauge size={16} /> Intersection Saturation
+            </h3>
+            <div className="w-full bg-slate-200 rounded-full h-2.5 mb-2 overflow-hidden">
+                <div className={`h-2.5 rounded-full ${cap.ratio > 100 ? 'bg-red-500' : cap.ratio > 80 ? 'bg-orange-500' : 'bg-emerald-500'}`} style={{ width: `${Math.min(cap.ratio, 100)}%` }}></div>
+            </div>
+            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">
+                Demand: {cap.demand.toFixed(1)} / Capacity: {cap.limit.toFixed(1)}
+            </p>
+            {cap.ratio > 100 && <p className="text-xs text-red-600 font-bold mt-2 animate-pulse">⚠️ Structural Gridlock Imminent</p>}
+        </div>
+
         <div className="space-y-6 text-sm">
           <div><label className="flex items-center justify-between font-bold mb-2 text-slate-700"><span>Cycles</span><span className="bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded text-xs">{totalCycles}</span></label>
             <input type="range" min="10" max="200" value={totalCycles} onChange={(e) => setTotalCycles(Number(e.target.value))} className="w-full accent-indigo-600" /></div>
@@ -83,16 +91,8 @@ export default function TrafficDashboard() {
                 <div className="flex gap-1"><input type="number" value={(arrivalsPerMin as any)[lane][0]} onChange={(e) => setArrivalsPerMin({...arrivalsPerMin, [lane]: [Number(e.target.value), (arrivalsPerMin as any)[lane][1]]})} className="w-14 border rounded-md p-1.5 text-center outline-none text-xs" />
                   <span className="text-slate-300 self-center">-</span><input type="number" value={(arrivalsPerMin as any)[lane][1]} onChange={(e) => setArrivalsPerMin({...arrivalsPerMin, [lane]: [(arrivalsPerMin as any)[lane][0], Number(e.target.value)]})} className="w-14 border rounded-md p-1.5 text-center outline-none text-xs" /></div></div>
             ))}</div>
-          
-          <div className="border-t border-slate-100 pt-5">
-            <label className="flex items-center justify-between font-bold mb-2 text-slate-700">
-              <span>Avg Time / Vehicle</span>
-              <span className="bg-slate-100 px-2 py-0.5 rounded text-xs">{avgCarTime}s</span>
-            </label>
-            {/* NEW: Float constraints implemented directly in the slider */}
-            <input type="range" min="1" max="4" step="0.5" value={avgCarTime} onChange={(e) => setAvgCarTime(Number(e.target.value))} className="w-full accent-indigo-600" />
-          </div>
-
+          <div className="border-t border-slate-100 pt-5"><label className="flex items-center justify-between font-bold mb-2 text-slate-700"><span>Avg Time / Vehicle</span><span className="bg-slate-100 px-2 py-0.5 rounded text-xs">{avgCarTime}s</span></label>
+            <input type="range" min="1" max="4" step="0.5" value={avgCarTime} onChange={(e) => setAvgCarTime(Number(e.target.value))} className="w-full accent-indigo-600" /></div>
           <div className="border-t border-slate-100 pt-5"><h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700"><GitMerge size={16} /> Number of Lanes</h3>
             <div className="grid grid-cols-2 gap-3"><div className="flex flex-col"><label className="text-[10px] uppercase font-bold text-slate-400 mb-1">North/South</label><input type="number" min="1" max="6" value={lanes.NS} onChange={(e) => setLanes({...lanes, NS: Number(e.target.value)})} className="border rounded-md p-1.5 text-center outline-none text-xs font-bold" /></div>
               <div className="flex flex-col"><label className="text-[10px] uppercase font-bold text-slate-400 mb-1">East/West</label><input type="number" min="1" max="6" value={lanes.EW} onChange={(e) => setLanes({...lanes, EW: Number(e.target.value)})} className="border rounded-md p-1.5 text-center outline-none text-xs font-bold" /></div></div></div>

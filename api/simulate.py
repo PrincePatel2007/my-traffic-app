@@ -20,27 +20,21 @@ class GradientRLAgent:
         
         min_green = max(10, int(avg_car_time * 2)) 
         
-        # FIX 1: Max green time strictly capped at 90s. 
-        # 160s single-phases cause mathematical death spirals on the cross-streets!
-        return max(min_green, min(90, int(round(target))))
+        # USER OVERRIDE: UPPER LIMIT REMOVED. The AI will scale the green time infinitely 
+        # based on traffic density and learned weights to clear the exact mathematical backlog.
+        return max(min_green, int(round(target)))
 
     def backpropagate(self, lane, failed_cars, wasted_time, holdovers):
-        # FIX 2: Smoothed out the panic surges so weights don't skyrocket instantly
         if holdovers > 0:
-            self.weights[lane] += self.learning_rate * min(20, holdovers) * 0.2
+            self.weights[lane] += self.learning_rate * min(30, holdovers) * 1.0
         elif failed_cars > 0:
-            self.weights[lane] += self.learning_rate * min(10, failed_cars) * 0.1
+            self.weights[lane] += self.learning_rate * min(20, failed_cars) * 0.4
         elif wasted_time > 0:
-            self.weights[lane] -= self.learning_rate * (wasted_time / 2.0)
+            self.weights[lane] -= self.learning_rate * (wasted_time / 5.0)
         else:
-            # FIX 3: BELT TIGHTENING (Mean Reversion). 
-            # If the AI cleared the queue perfectly, slightly shrink the weight!
-            # This forces the AI to constantly seek tighter, faster timings instead of getting lazy.
             self.weights[lane] -= self.learning_rate * 0.1
 
-        # FIX 4: Sane boundaries. 5.0 was way too high. 2.0 means the AI can ask for 200% 
-        # of the ideal mathematical time, which is plenty of safety buffer!
-        self.weights[lane] = max(0.5, min(2.0, self.weights[lane]))
+        self.weights[lane] = max(0.1, min(5.0, self.weights[lane]))
 
 
 class RealisticTrafficOptimizer:
@@ -77,7 +71,6 @@ class RealisticTrafficOptimizer:
         total_overhead = overhead_yellow + overhead_safety_red + overhead_startup
         
         safe_lane_count = max(1, lane_count)
-        
         arrival_per_min_per_lane = (actual_arrivals / cycle_mins) / safe_lane_count if cycle_mins > 0 else 0
         
         is_continuous_flow = arrival_per_min_per_lane > 2.0
@@ -119,7 +112,7 @@ class RealisticTrafficOptimizer:
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Weight Decay (Belt Tightening) Live!"})
+        return jsonify({"status": "SUCCESS! AI Uncapped & Physics Validators Live!"})
 
     try:
         data = request.json
@@ -130,6 +123,9 @@ def simulate():
         raw_lanes = data.get('lanes', {"NS": 3, "EW": 3})
         lanes_config = {"NS": max(1, int(raw_lanes.get("NS", 3) or 3)), "EW": max(1, int(raw_lanes.get("EW", 3) or 3))}
         
+        # ==========================================
+        # STRICT PHYSICAL CAPACITY VALIDATOR (HCM)
+        # ==========================================
         MAX_CARS_PER_MIN_PER_LANE = 5.0 
         
         for lane in ["North", "South", "East", "West"]:
@@ -148,6 +144,7 @@ def simulate():
                     f"Please lower the Arrivals/Min or add more lanes to accommodate this volume."
                 )
                 return jsonify({"error": error_msg}), 400
+        # ==========================================
 
         ev_probs = data.get('ev_probs', {"North": 0.05, "South": 0.05, "East": 0.05, "West": 0.05})
         user_fx_times = data.get('fx_times', {"North": 45, "South": 45, "East": 60, "West": 60})
@@ -295,7 +292,7 @@ def simulate():
                 timing_str = "⏭️ Skipped" if res['alloc'] == 0 else f"🟩 {res['alloc']}s (+11s 🚦)"
 
                 log_data_fx.append({
-                    "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": timing_str, 
+                    "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": f"{res['alloc']}s", 
                     "Queue": str(res['q']), "Cycle Loss": loss, "Events": event_fx,
                     "Arrivals": new_arrivals_fx[lane], "Failed": res['unc'], "Wasted": res['wst'],
                     "LossWait": l_wait, "LossFail": l_fail, "LossQueue": l_queue, "LossStarve": l_starve, "RedTime": true_red
