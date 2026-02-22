@@ -31,7 +31,6 @@ class GradientRLAgent:
 
         self.weights[lane] = max(0.1, min(5.0, self.weights[lane]))
 
-
 class RealisticTrafficOptimizer:
     def __init__(self):
         self.lanes = ["North", "South", "East", "West"]
@@ -56,18 +55,28 @@ class RealisticTrafficOptimizer:
         spike_max = int(safe_max * 1.5) + 1
         return random.randint(safe_max, spike_max) if prob < 0.10 else random.randint(min_arr, safe_max)
 
-    def simulate_lane_traffic(self, queue, allocated_green, avg_car_time, can_cut_early, lane_count):
+    def simulate_lane_traffic(self, lane, queue, allocated_green, avg_car_time, can_cut_early, lane_count, arrivals_per_min_dict):
         if allocated_green == 0:
-            return queue, 0, 0, 0, 0 
+            return queue, 0, 0, 0, 0, 0
             
         overhead_yellow = 5
         overhead_safety_red = 3
         overhead_startup = 3
         total_overhead = overhead_yellow + overhead_safety_red + overhead_startup
         
+        avg_arr_rate = sum(arrivals_per_min_dict[lane]) / 2.0
+        safe_lane_count = max(1, lane_count)
+        
+        arrival_per_min_per_lane = avg_arr_rate / safe_lane_count
+        clearance_per_min_per_lane = 60.0 / avg_car_time
+        
+        is_continuous_flow = arrival_per_min_per_lane >= (clearance_per_min_per_lane * 0.70)
+        
+        if is_continuous_flow:
+            can_cut_early = False
+            
         time_spent_moving = 0
         cleared_cars = 0
-        safe_lane_count = max(1, lane_count)
         
         while cleared_cars < queue:
             car_time = random.randint(max(1, avg_car_time - 1), avg_car_time + 1)
@@ -78,23 +87,28 @@ class RealisticTrafficOptimizer:
                 break 
         
         uncleared = queue - cleared_cars
+        extra_cars_cleared = 0
         
         if can_cut_early:
             used_green = time_spent_moving if uncleared == 0 else allocated_green
             wasted_green = used_green - time_spent_moving if uncleared == 0 else 0
         else:
             used_green = allocated_green
-            wasted_green = allocated_green - time_spent_moving if uncleared == 0 else 0
+            if is_continuous_flow and uncleared == 0 and time_spent_moving < allocated_green:
+                wasted_green = 0  
+                extra_time = allocated_green - time_spent_moving
+                extra_cars_cleared = int(extra_time / avg_car_time) * safe_lane_count
+            else:
+                wasted_green = allocated_green - time_spent_moving if uncleared == 0 else 0
                 
         total_phase_time = used_green + total_overhead
         
-        return uncleared, total_phase_time, wasted_green, used_green, total_overhead
-
+        return uncleared, total_phase_time, wasted_green, used_green, total_overhead, extra_cars_cleared
 
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Split Wait Math & Pre-Arrival Fix Live!"})
+        return jsonify({"status": "SUCCESS! HCM Physics Constraints Live!"})
 
     try:
         data = request.json
@@ -105,6 +119,29 @@ def simulate():
         raw_lanes = data.get('lanes', {"NS": 3, "EW": 3})
         lanes_config = {"NS": max(1, int(raw_lanes.get("NS", 3) or 3)), "EW": max(1, int(raw_lanes.get("EW", 3) or 3))}
         
+        # ==========================================
+        # NEW: PHYSICAL CAPACITY VALIDATOR (HCM Standards)
+        # ==========================================
+        MAX_CARS_PER_MIN_PER_LANE = 32.0 
+        
+        for lane in ["North", "South", "East", "West"]:
+            lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
+            max_arrival_request = arrivals_per_min[lane][1]
+            cars_per_lane = max_arrival_request / max(1, lane_count)
+            
+            if cars_per_lane > MAX_CARS_PER_MIN_PER_LANE:
+                error_msg = (
+                    f"Physical Space Violation on {lane} bound.\n\n"
+                    f"You requested up to {max_arrival_request} cars/min across {lane_count} lane(s) "
+                    f"({int(cars_per_lane)} cars/min per lane).\n\n"
+                    f"According to the Highway Capacity Manual, the absolute maximum saturation flow rate "
+                    f"is roughly 1,900 vehicles per hour per lane (≈32 cars/min). Entering higher values "
+                    f"requires vehicles to physically overlap.\n\n"
+                    f"Please lower the Arrivals/Min or add more lanes."
+                )
+                return jsonify({"error": error_msg}), 400
+        # ==========================================
+
         ev_probs = data.get('ev_probs', {"North": 0.05, "South": 0.05, "East": 0.05, "West": 0.05})
         user_fx_times = data.get('fx_times', {"North": 45, "South": 45, "East": 60, "West": 60})
 
@@ -121,7 +158,6 @@ def simulate():
             new_arrivals_ai = {}
             new_arrivals_fx = {}
             
-            # 1. ADD NEW ARRIVALS FIRST
             for lane in sim.lanes:
                 ai_cars = sim.generate_arrivals(lane, arrivals_per_min, ai_cycle_mins)
                 new_arrivals_ai[lane] = ai_cars
@@ -131,7 +167,6 @@ def simulate():
                 new_arrivals_fx[lane] = fx_cars
                 sim.fx_queues[lane] += fx_cars
 
-            # 2. PREDICT AI ACTION BASED ON THE ACTUAL NEW QUEUE (Fixes the 0s Blindspot!)
             for lane in sim.lanes:
                 lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
                 target_time = sim.ml_agent.get_action(lane, sim.ai_queues[lane], lane_count, avg_car_time)
@@ -159,7 +194,6 @@ def simulate():
                 if lane not in ai_execution_order: ai_execution_order.append(lane)
             fx_execution_order = ["North", "South", "East", "West"]
 
-            # 🧠 PHASE 1: SIMULATE AI LANES
             ai_phase_results = {}
             total_ai_used_time = 0
             for lane in ai_execution_order:
@@ -172,13 +206,14 @@ def simulate():
                     effective_pos = max(1, ev_data["pos_ai"] // lane_count)
                     alloc = max(alloc, effective_pos * (avg_car_time + 1))
                 
-                unc, total_used, wst, used_green, overhead = sim.simulate_lane_traffic(q, alloc, avg_car_time, True, lane_count)
+                unc, total_used, wst, used_green, overhead, extra_cleared = sim.simulate_lane_traffic(lane, q, alloc, avg_car_time, True, lane_count, arrivals_per_min)
+                new_arrivals_ai[lane] = max(0, new_arrivals_ai[lane] - extra_cleared)
+                
                 ai_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': total_used, 'wst': wst, 'green': used_green, 'overhead': overhead, 'ev': ev_data}
                 total_ai_used_time += total_used
 
             sim.last_ai_cycle_time = total_ai_used_time
 
-            # 🧠 PHASE 1: SIMULATE FIXED LANES
             fx_phase_results = {}
             total_fx_used_time = 0
             for lane in fx_execution_order:
@@ -187,31 +222,28 @@ def simulate():
                 lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
                 ev_data = next((ev for ev in active_evs if ev["lane"] == lane), None)
                 
-                unc, total_used, wst, used_green, overhead = sim.simulate_lane_traffic(q, alloc, avg_car_time, False, lane_count)
+                unc, total_used, wst, used_green, overhead, extra_cleared = sim.simulate_lane_traffic(lane, q, alloc, avg_car_time, False, lane_count, arrivals_per_min)
+                new_arrivals_fx[lane] = max(0, new_arrivals_fx[lane] - extra_cleared)
+                
                 fx_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': total_used, 'wst': wst, 'green': used_green, 'overhead': overhead, 'ev': ev_data}
                 total_fx_used_time += total_used
                 
             sim.last_fx_cycle_time = total_fx_used_time
 
-            # 🧠 PHASE 2: EXACT MATHEMATICAL LOSS CALCULATION
             def calculate_exact_loss(lane, res, red_time, is_ai, current_new_arrivals):
                 effective_fail_red = max(45, red_time)
-                
                 holdovers = max(0, res['q'] - current_new_arrivals[lane])
                 new_arrived = current_new_arrivals[lane]
                 
-                # NEW: SPLIT MATH FOR HOLDOVERS VS NEW ARRIVALS
-                penalty_holdover = red_time        # Full Red Time
-                penalty_new = red_time / 2.0       # Half Red Time
+                penalty_holdover = red_time 
+                penalty_new = red_time / 2.0 
                 
-                # Escalation logic for > 60s wait
                 if red_time > 60:
                     escalation = (red_time - 60) * 1.25
                     penalty_holdover += escalation
                     penalty_new += escalation
                     
                 loss_waiting = (holdovers * penalty_holdover) + (new_arrived * penalty_new)
-                
                 loss_failed = res['unc'] * (effective_fail_red * 1.5)
                 loss_queue = res['q'] * 5.0
                 loss_starve = (holdovers ** 2) * 5.0 
@@ -223,24 +255,15 @@ def simulate():
                     
                 return int(total_loss), int(loss_waiting), int(loss_failed), int(loss_queue), int(loss_starve), int(red_time)
 
-            # PROCESS AI LOGS
             for phase_step, lane in enumerate(ai_execution_order, 1):
                 res = ai_phase_results[lane]
                 red_time = max(0, total_ai_used_time - res['used'])
-                
                 loss, l_wait, l_fail, l_queue, l_starve, true_red = calculate_exact_loss(lane, res, red_time, True, new_arrivals_ai)
                 sim.ai_total_loss += loss
                 sim.ai_queues[lane] = res['unc']
-
                 event_ai = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_ai']}) ✅ | " if res['ev'] else ("⚡ Recovery | " if sim.emergency_cooldowns[lane] > 0 else "")
-                
-                if res['alloc'] == 0:
-                    timing_str = "⏭️ Skipped (Empty)"
-                else:
-                    if res['green'] < res['alloc']:
-                        timing_str = f"🟩 {res['alloc']}s ✂️ {res['green']}s (+11s 🚦)"
-                    else:
-                        timing_str = f"🟩 {res['alloc']}s (+11s 🚦)"
+                if res['alloc'] == 0: timing_str = "⏭️ Skipped (Empty)"
+                else: timing_str = f"🟩 {res['alloc']}s ✂️ {res['green']}s (+11s 🚦)" if res['green'] < res['alloc'] else f"🟩 {res['alloc']}s (+11s 🚦)"
 
                 log_data_ai.append({
                     "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": timing_str, 
@@ -249,28 +272,17 @@ def simulate():
                     "LossWait": l_wait, "LossFail": l_fail, "LossQueue": l_queue, "LossStarve": l_starve, "RedTime": true_red
                 })
 
-            # PROCESS FIXED LOGS
             for phase_step, lane in enumerate(fx_execution_order, 1):
                 res = fx_phase_results[lane]
                 red_time = max(0, total_fx_used_time - res['used'])
-                
                 loss, l_wait, l_fail, l_queue, l_starve, true_red = calculate_exact_loss(lane, res, red_time, False, new_arrivals_fx)
                 sim.fx_total_loss += loss
                 sim.fx_queues[lane] = res['unc']
-
-                event_fx = ""
-                if res['ev']:
-                    lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
-                    req = max(1, res['ev']['pos_fx'] // lane_count) * (avg_car_time + 1)
-                    event_fx = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_fx']}) " + ("⚠️ Lucky | " if res['alloc'] >= req else "❌ STRANDED! | ")
-
-                if res['alloc'] == 0:
-                    timing_str = "⏭️ Skipped"
-                else:
-                    timing_str = f"🟩 {res['alloc']}s (+11s 🚦)"
+                event_fx = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_fx']}) " + ("⚠️ Lucky | " if res['alloc'] >= req else "❌ STRANDED! | ") if res['ev'] else ""
+                timing_str = "⏭️ Skipped" if res['alloc'] == 0 else f"🟩 {res['alloc']}s (+11s 🚦)"
 
                 log_data_fx.append({
-                    "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": f"{res['alloc']}s", 
+                    "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": timing_str, 
                     "Queue": str(res['q']), "Cycle Loss": loss, "Events": event_fx,
                     "Arrivals": new_arrivals_fx[lane], "Failed": res['unc'], "Wasted": res['wst'],
                     "LossWait": l_wait, "LossFail": l_fail, "LossQueue": l_queue, "LossStarve": l_starve, "RedTime": true_red

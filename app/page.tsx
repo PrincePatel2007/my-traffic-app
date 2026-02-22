@@ -1,6 +1,6 @@
 "use client";
 import React, { useState } from 'react';
-import { Zap, Play, Activity, AlertTriangle, TrendingDown, Clock, Car, Siren, LayoutList, Columns, Timer, GitMerge } from 'lucide-react';
+import { Zap, Activity, AlertTriangle, TrendingDown, Clock, Car, Siren, LayoutList, Columns, Timer, GitMerge } from 'lucide-react';
 
 export default function TrafficDashboard() {
   const [totalCycles, setTotalCycles] = useState(50);
@@ -16,9 +16,16 @@ export default function TrafficDashboard() {
   const [metrics, setMetrics] = useState({ aiLoss: 0, fxLoss: 0, gain: 0 });
   const [isSimulating, setIsSimulating] = useState(false);
   const [isDetailedView, setIsDetailedView] = useState(false);
+  
+  // NEW: State for capturing the physics error
+  const [simError, setSimError] = useState<string | null>(null);
 
   const runSimulation = async () => {
-    setIsSimulating(true); setAiLogs([]); setFxLogs([]); setMetrics({ aiLoss: 0, fxLoss: 0, gain: 0 });
+    setIsSimulating(true); 
+    setAiLogs([]); 
+    setFxLogs([]); 
+    setMetrics({ aiLoss: 0, fxLoss: 0, gain: 0 });
+    setSimError(null);
     
     try {
       const response = await fetch('/api/simulate', {
@@ -27,17 +34,22 @@ export default function TrafficDashboard() {
       });
       
       const data = await response.json();
-      if (!response.ok || data.error) throw new Error(data.error || "Server crashed.");
+      
+      // Check for the HCM Physics Error from the backend
+      if (!response.ok || data.error) {
+          setSimError(data.error || "Simulation failed.");
+          setIsSimulating(false);
+          return;
+      }
+      
       if (!data.ai_logs) throw new Error("Invalid data format received.");
 
       let i = 0;
-      
       const interval = setInterval(() => {
         if (i >= data.ai_logs.length) { clearInterval(interval); setIsSimulating(false); return; }
         setAiLogs(prev => [data.ai_logs[i], ...prev]);
         setFxLogs(prev => [data.fx_logs[i], ...prev]);
         
-        // RESTORED: Calculating exactly from Cycle 1 to reflect real-world loss!
         const aiL = data.ai_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
         const fxL = data.fx_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
         
@@ -45,7 +57,10 @@ export default function TrafficDashboard() {
         i++;
       }, 100); 
       
-    } catch (error: any) { setIsSimulating(false); alert(`Simulation Failed:\n\n${error.message}`); }
+    } catch (error: any) { 
+      setIsSimulating(false); 
+      setSimError(error.message); 
+    }
   };
 
   return (
@@ -76,6 +91,15 @@ export default function TrafficDashboard() {
                 <div key={lane} className="mb-3 last:mb-0"><label className="flex justify-between text-[10px] uppercase font-black text-red-400 mb-1"><span>{lane}</span><span>{(evProbs as any)[lane]}%</span></label>
                   <input type="range" min="0" max="100" value={(evProbs as any)[lane]} onChange={(e) => setEvProbs({...evProbs, [lane]: Number(e.target.value)})} className="w-full accent-red-500" /></div>
               ))}</div></div>
+          
+          {/* THE NEW INLINE ERROR DISPLAY */}
+          {simError && (
+            <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl text-xs font-medium whitespace-pre-line shadow-sm">
+              <div className="font-black flex items-center gap-1 mb-2"><AlertTriangle size={14}/> Simulation Blocked</div>
+              {simError}
+            </div>
+          )}
+
           <button onClick={runSimulation} disabled={isSimulating} className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold hover:bg-slate-800 transition disabled:bg-slate-300 shadow-md">
             {isSimulating ? "Simulating..." : "Launch Simulation"}
           </button>
