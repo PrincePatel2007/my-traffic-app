@@ -18,7 +18,10 @@ class GradientRLAgent:
         ideal_base_time = (queue / safe_lane_count) * avg_car_time
         target = ideal_base_time * self.weights[lane]
         
-        min_green = max(10, int(avg_car_time * 2)) 
+        # CALCULATED SACRIFICE: Dropped the 10s safety net. 
+        # If the AI wants to starve a lane to save the global loss function, 
+        # it only has to give enough time for exactly 1 car to pass (to prevent driver aggression).
+        min_green = max(3, int(avg_car_time)) 
         return max(min_green, int(round(target)))
 
     def backpropagate(self, lane, failed_cars, wasted_time, holdovers):
@@ -97,7 +100,7 @@ class RealisticTrafficOptimizer:
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! HCM Limits Removed. Prepare for Gridlock!"})
+        return jsonify({"status": "SUCCESS! Calculated Sacrifice Physics Live!"})
 
     try:
         data = request.json
