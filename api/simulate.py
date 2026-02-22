@@ -6,38 +6,32 @@ app = Flask(__name__)
 class ReinforcementLearningAgent:
     def __init__(self, lanes):
         self.lanes = lanes
-        # The AI starts with baseline weights, but WILL adjust these up and down based on learning
         self.weights = {lane: {"density_importance": 1.0, "cross_traffic_pressure": 0.1} for lane in lanes}
-        self.learning_rate = 0.05
+        
+        # FIX: Dramatically lowered learning rate for smooth, stable convergence
+        self.learning_rate = 0.005 
 
     def get_target_time(self, lane, queue, lane_count, cross_queues_total, avg_car_time):
-        # Action Selection (Policy)
         w_density = self.weights[lane]["density_importance"]
         w_cross = self.weights[lane]["cross_traffic_pressure"]
 
-        # Base time needed to clear the queue
         ideal_time = (queue / lane_count) * avg_car_time * w_density
-        
-        # AUTO-STOPPING LOGIC: If cross-traffic is massive, the AI learns to cut this lane early
         cross_pressure_reduction = cross_queues_total * w_cross
         
         target = ideal_time - cross_pressure_reduction
         return max(15, min(160, int(target)))
 
     def update_weights(self, lane, wasted, failed):
-        # Weight Update (Learning Step) based on environment feedback
         if wasted > 0:
-            # We over-allocated. Decrease density focus, increase sensitivity to cross-traffic
             self.weights[lane]["density_importance"] -= self.learning_rate * 0.5
             self.weights[lane]["cross_traffic_pressure"] += self.learning_rate * 0.2
         if failed > 0:
-            # We under-allocated. Increase density focus, ignore cross-traffic a bit more
             self.weights[lane]["density_importance"] += self.learning_rate * 1.0
             self.weights[lane]["cross_traffic_pressure"] -= self.learning_rate * 0.1
 
-        # Keep weights within logical bounds
-        self.weights[lane]["density_importance"] = max(0.5, min(3.0, self.weights[lane]["density_importance"]))
-        self.weights[lane]["cross_traffic_pressure"] = max(0.01, min(1.0, self.weights[lane]["cross_traffic_pressure"]))
+        # FIX: Tightened the safety bounds so the RL model can't explore into disastrous extremes
+        self.weights[lane]["density_importance"] = max(0.8, min(2.0, self.weights[lane]["density_importance"]))
+        self.weights[lane]["cross_traffic_pressure"] = max(0.05, min(0.4, self.weights[lane]["cross_traffic_pressure"]))
 
 
 class RealisticTrafficOptimizer:
@@ -85,7 +79,7 @@ class RealisticTrafficOptimizer:
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! RL Agent is Live!"})
+        return jsonify({"status": "SUCCESS! Stabilized RL Agent is Live!"})
 
     data = request.json
     total_cycles = data.get('total_cycles', 50)
@@ -168,21 +162,17 @@ def simulate():
             # --- DYNAMIC RL MULTIPLIERS ---
             flags = []
             
-            # 1. Vehicles waiting more than 1 cycle
             stuck_mult = 2.5 if holdovers > 0 else 1.0
             if holdovers > 0: flags.append("🔄 Multi-Cycle Jam")
             
-            # 2. Wait exceeds 60s
             timeout_mult = 1.5 if red_time > 60 else 1.0
             if red_time > 60: flags.append("⏳ >60s Wait Timeout")
             
-            # 3. Density exceeds 30 per lane
             jam_mult = 3.0 if res['q'] > (30 * lane_count) else 1.0
             if jam_mult > 1.0: flags.append("💥 Critical Density")
 
             loss = (res['wst'] * 5) + (res['unc'] * (red_time * stuck_mult * timeout_mult)) + (wait_penalty * jam_mult)
             
-            # RL Weight Update (Only for AI)
             if is_ai:
                 sim.rl_agent.update_weights(lane, res['wst'], res['unc'])
                 
@@ -235,7 +225,6 @@ def simulate():
         for lane in sim.lanes:
             lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
             
-            # The RL Agent calculates the optimal target
             target_time = sim.rl_agent.get_target_time(lane, sim.ai_queues[lane], lane_count, cross_traffic_sums[lane], avg_car_time)
             
             if sim.emergency_cooldowns[lane] > 0:
