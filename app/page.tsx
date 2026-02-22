@@ -18,7 +18,6 @@ export default function TrafficDashboard() {
   const [isDetailedView, setIsDetailedView] = useState(false);
   const [simError, setSimError] = useState<string | null>(null);
 
-  // REAL-TIME CAPACITY CALCULATOR (NOW INCLUDES LANE MULTIPLIERS)
   const calculateCapacity = () => {
     const totalAvgArrivals = 
       ((arrivalsPerMin.North[0] + arrivalsPerMin.North[1]) / 2) +
@@ -26,11 +25,7 @@ export default function TrafficDashboard() {
       ((arrivalsPerMin.East[0] + arrivalsPerMin.East[1]) / 2) +
       ((arrivalsPerMin.West[0] + arrivalsPerMin.West[1]) / 2);
     
-    // Calculate the average number of lanes across all 4 directions
     const avgLanes = (lanes.NS * 2 + lanes.EW * 2) / 4;
-    
-    // Base capacity for 1 lane is (60 / avgCarTime) * 63% efficiency (due to dead time).
-    // Multiply by the average lanes to get the total intersection bandwidth!
     const maxClearancePerMin = ((60 / avgCarTime) * 0.63) * avgLanes; 
     const saturationRatio = (totalAvgArrivals / maxClearancePerMin) * 100;
     
@@ -40,28 +35,58 @@ export default function TrafficDashboard() {
   const cap = calculateCapacity();
 
   const runSimulation = async () => {
+    if (isSimulating) return;
     setIsSimulating(true); setAiLogs([]); setFxLogs([]); setMetrics({ aiLoss: 0, fxLoss: 0, gain: 0 }); setSimError(null);
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); 
+    
     try {
       const response = await fetch('/api/simulate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ total_cycles: totalCycles, avg_car_time: avgCarTime, arrivals_per_min: arrivalsPerMin, lanes: lanes, fx_times: fxTimes, ev_probs: { North: evProbs.North / 100, South: evProbs.South / 100, East: evProbs.East / 100, West: evProbs.West / 100 } })
+        body: JSON.stringify({ total_cycles: totalCycles, avg_car_time: avgCarTime, arrivals_per_min: arrivalsPerMin, lanes: lanes, fx_times: fxTimes, ev_probs: { North: evProbs.North / 100, South: evProbs.South / 100, East: evProbs.East / 100, West: evProbs.West / 100 } }),
+        signal: controller.signal
       });
-      const data = await response.json();
-      if (!response.ok || data.error) { setSimError(data.error || "Simulation failed."); setIsSimulating(false); return; }
+      
+      clearTimeout(timeoutId);
+      
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        throw new Error("Server crashed or returned an invalid response.");
+      }
+
+      if (!response.ok || data.error) { throw new Error(data.error || "Simulation failed."); }
       if (!data.ai_logs) throw new Error("Invalid data format received.");
 
       let i = 0;
+      const chunkSize = 4; 
       const interval = setInterval(() => {
         if (i >= data.ai_logs.length) { clearInterval(interval); setIsSimulating(false); return; }
-        setAiLogs(prev => [data.ai_logs[i], ...prev]);
-        setFxLogs(prev => [data.fx_logs[i], ...prev]);
         
-        const aiL = data.ai_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
-        const fxL = data.fx_logs.slice(0, i + 1).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
+        const nextI = Math.min(i + chunkSize, data.ai_logs.length);
+        const newAiLogs = data.ai_logs.slice(i, nextI);
+        const newFxLogs = data.fx_logs.slice(i, nextI);
+
+        setAiLogs(prev => [...newAiLogs.reverse(), ...prev]);
+        setFxLogs(prev => [...newFxLogs.reverse(), ...prev]);
+        
+        const aiL = data.ai_logs.slice(0, nextI).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
+        const fxL = data.fx_logs.slice(0, nextI).reduce((acc: number, row: any) => acc + (row?.["Cycle Loss"] || 0), 0);
         setMetrics({ aiLoss: aiL, fxLoss: fxL, gain: fxL > 0 ? ((fxL - aiL) / fxL) * 100 : 0 });
-        i++;
-      }, 100); 
-    } catch (error: any) { setIsSimulating(false); setSimError(error.message); }
+        i = nextI;
+      }, 50); 
+      
+    } catch (error: any) { 
+      clearTimeout(timeoutId);
+      setIsSimulating(false); 
+      if (error.name === 'AbortError') {
+          setSimError("⏳ Connection Timed Out: The AI generated massive queues and exceeded the 10-second backend limit.");
+      } else {
+          setSimError(error.message); 
+      }
+    }
   };
 
   return (
@@ -109,13 +134,13 @@ export default function TrafficDashboard() {
           
           {simError && (
             <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl text-xs font-medium whitespace-pre-line shadow-sm">
-              <div className="font-black flex items-center gap-1 mb-2"><AlertTriangle size={14}/> Simulation Blocked</div>
+              <div className="font-black flex items-center gap-1 mb-2"><AlertTriangle size={14}/> Error</div>
               {simError}
             </div>
           )}
 
-          <button onClick={runSimulation} disabled={isSimulating} className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold hover:bg-slate-800 transition disabled:bg-slate-300 shadow-md">
-            {isSimulating ? "Simulating..." : "Launch Simulation"}
+          <button onClick={runSimulation} disabled={isSimulating} className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold hover:bg-slate-800 transition disabled:bg-slate-300 shadow-md flex justify-center items-center gap-2">
+            {isSimulating ? <><Activity className="animate-spin" size={16} /> Simulating...</> : "Launch Simulation"}
           </button>
         </div>
       </div>

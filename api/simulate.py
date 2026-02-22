@@ -19,9 +19,7 @@ class GradientRLAgent:
         target = ideal_base_time * self.weights[lane]
         
         min_green = max(10, int(avg_car_time * 2)) 
-        
-        # USER OVERRIDE: UPPER LIMIT REMOVED. The AI will scale the green time infinitely 
-        # based on traffic density and learned weights to clear the exact mathematical backlog.
+        # UNBOUNDED AI: Can scale as high as needed, but will cut early if queue clears!
         return max(min_green, int(round(target)))
 
     def backpropagate(self, lane, failed_cars, wasted_time, holdovers):
@@ -48,7 +46,6 @@ class RealisticTrafficOptimizer:
         self.ai_total_loss = 0
         self.fx_total_loss = 0
         self.ml_agent = GradientRLAgent(self.lanes)
-        
         self.last_ai_cycle_time = 120 
         self.last_fx_cycle_time = 120
 
@@ -56,14 +53,13 @@ class RealisticTrafficOptimizer:
         prob = random.random()
         min_arr = int(arrival_ranges_per_min[lane][0] * cycle_length_mins)
         max_arr = int(arrival_ranges_per_min[lane][1] * cycle_length_mins)
-        
         safe_max = max(min_arr, max_arr)
         spike_max = int(safe_max * 1.5) + 1
         return random.randint(safe_max, spike_max) if prob < 0.10 else random.randint(min_arr, safe_max)
 
-    def simulate_lane_traffic(self, lane, queue, allocated_green, avg_car_time, can_cut_early, lane_count, actual_arrivals, cycle_mins):
+    def simulate_lane_traffic(self, lane, queue, allocated_green, avg_car_time, can_cut_early, lane_count):
         if allocated_green == 0:
-            return queue, 0, 0, 0, 0, 0
+            return queue, 0, 0, 0, 0
             
         overhead_yellow = 5
         overhead_safety_red = 3
@@ -71,80 +67,56 @@ class RealisticTrafficOptimizer:
         total_overhead = overhead_yellow + overhead_safety_red + overhead_startup
         
         safe_lane_count = max(1, lane_count)
-        arrival_per_min_per_lane = (actual_arrivals / cycle_mins) / safe_lane_count if cycle_mins > 0 else 0
-        
-        is_continuous_flow = arrival_per_min_per_lane > 2.0
-        
-        if can_cut_early: 
-            if is_continuous_flow:
-                can_cut_early = False 
             
-        time_spent_moving = 0.0
-        cleared_cars = 0
-        
-        while cleared_cars < queue:
-            car_time = random.uniform(max(0.5, avg_car_time - 0.5), avg_car_time + 0.5)
-            if time_spent_moving + car_time <= allocated_green:
-                cleared_cars += min(safe_lane_count, queue - cleared_cars)
-                time_spent_moving += car_time
-            else:
-                break 
+        # O(1) PERFORMANCE UPGRADE: Fast-forward math to prevent Server Timeouts!
+        if queue > 50:
+            max_possible_clearance = int((allocated_green / avg_car_time) * safe_lane_count)
+            cleared_cars = min(queue, max_possible_clearance)
+            time_spent_moving = (cleared_cars / safe_lane_count) * avg_car_time
+        else:
+            time_spent_moving = 0.0
+            cleared_cars = 0
+            while cleared_cars < queue:
+                car_time = random.uniform(max(0.5, avg_car_time - 0.5), avg_car_time + 0.5)
+                if time_spent_moving + car_time <= allocated_green:
+                    cleared_cars += min(safe_lane_count, queue - cleared_cars)
+                    time_spent_moving += car_time
+                else:
+                    break 
         
         uncleared = queue - cleared_cars
-        extra_cars_cleared = 0
         
+        # AGGRESSIVE DENSITY TRIMMING: Automatically cuts time the moment the immediate queue is gone
         if can_cut_early:
             used_green = time_spent_moving if uncleared == 0 else allocated_green
             wasted_green = used_green - time_spent_moving if uncleared == 0 else 0
         else:
             used_green = allocated_green
-            if is_continuous_flow and uncleared == 0 and time_spent_moving < allocated_green:
-                wasted_green = 0  
-                extra_time = allocated_green - time_spent_moving
-                extra_cars_cleared = int(extra_time / avg_car_time) * safe_lane_count
-            else:
-                wasted_green = allocated_green - time_spent_moving if uncleared == 0 else 0
+            wasted_green = allocated_green - time_spent_moving if uncleared == 0 else 0
                 
         total_phase_time = used_green + total_overhead
-        
-        return uncleared, int(round(total_phase_time)), int(round(wasted_green)), int(round(used_green)), total_overhead, extra_cars_cleared
+        return uncleared, int(round(total_phase_time)), int(round(wasted_green)), int(round(used_green)), total_overhead
 
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! AI Uncapped & Physics Validators Live!"})
+        return jsonify({"status": "SUCCESS! Aggressive Density Trimming Live!"})
 
     try:
         data = request.json
         total_cycles = int(data.get('total_cycles', 50))
         avg_car_time = float(data.get('avg_car_time', 2.5)) 
-        
         arrivals_per_min = data.get('arrivals_per_min', {"North": [1, 5], "South": [1, 5], "East": [2, 8], "West": [2, 8]})
         raw_lanes = data.get('lanes', {"NS": 3, "EW": 3})
         lanes_config = {"NS": max(1, int(raw_lanes.get("NS", 3) or 3)), "EW": max(1, int(raw_lanes.get("EW", 3) or 3))}
         
-        # ==========================================
-        # STRICT PHYSICAL CAPACITY VALIDATOR (HCM)
-        # ==========================================
         MAX_CARS_PER_MIN_PER_LANE = 5.0 
-        
         for lane in ["North", "South", "East", "West"]:
             lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
             max_arrival_request = arrivals_per_min[lane][1]
             cars_per_lane = max_arrival_request / max(1, lane_count)
-            
             if cars_per_lane > MAX_CARS_PER_MIN_PER_LANE:
-                error_msg = (
-                    f"Traffic Flow Violation on {lane} bound.\n\n"
-                    f"You requested up to {max_arrival_request} vehicles/min across {lane_count} lane(s) "
-                    f"({round(cars_per_lane, 1)} vehicles/min per lane).\n\n"
-                    f"Based on strict urban congestion modeling, the absolute maximum permitted flow rate "
-                    f"is set to {int(MAX_CARS_PER_MIN_PER_LANE)} vehicles per minute per lane. Exceeding this limit "
-                    f"would force vehicles to physically overlap in the simulation.\n\n"
-                    f"Please lower the Arrivals/Min or add more lanes to accommodate this volume."
-                )
-                return jsonify({"error": error_msg}), 400
-        # ==========================================
+                return jsonify({"error": "Traffic Flow Violation on " + lane + " bound. Exceeds HCM max capacity."}), 400
 
         ev_probs = data.get('ev_probs', {"North": 0.05, "South": 0.05, "East": 0.05, "West": 0.05})
         user_fx_times = data.get('fx_times', {"North": 45, "South": 45, "East": 60, "West": 60})
@@ -155,7 +127,6 @@ def simulate():
 
         for cycle in range(1, total_cycles + 1):
             sim.fx_times = user_fx_times.copy()
-            
             ai_cycle_mins = max(0.25, sim.last_ai_cycle_time / 60.0)
             fx_cycle_mins = max(0.25, sim.last_fx_cycle_time / 60.0)
 
@@ -174,11 +145,9 @@ def simulate():
             for lane in sim.lanes:
                 lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
                 target_time = sim.ml_agent.get_action(lane, sim.ai_queues[lane], lane_count, avg_car_time)
-                
                 if sim.emergency_cooldowns[lane] > 0:
                     target_time += 15
                     sim.emergency_cooldowns[lane] -= 1
-                    
                 sim.ai_times[lane] = target_time
 
             ev_priorities = {"Ambulance": 1, "Fire Truck": 2, "Police Car": 3}
@@ -210,8 +179,7 @@ def simulate():
                     effective_pos = max(1, ev_data["pos_ai"] // lane_count)
                     alloc = max(alloc, int(effective_pos * (avg_car_time + 1)))
                 
-                unc, total_used, wst, used_green, overhead, extra_cleared = sim.simulate_lane_traffic(lane, q, alloc, avg_car_time, True, lane_count, new_arrivals_ai[lane], ai_cycle_mins)
-                new_arrivals_ai[lane] = max(0, new_arrivals_ai[lane] - extra_cleared)
+                unc, total_used, wst, used_green, overhead = sim.simulate_lane_traffic(lane, q, alloc, avg_car_time, True, lane_count)
                 
                 ai_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': total_used, 'wst': wst, 'green': used_green, 'overhead': overhead, 'ev': ev_data}
                 total_ai_used_time += total_used
@@ -226,8 +194,7 @@ def simulate():
                 lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
                 ev_data = next((ev for ev in active_evs if ev["lane"] == lane), None)
                 
-                unc, total_used, wst, used_green, overhead, extra_cleared = sim.simulate_lane_traffic(lane, q, alloc, avg_car_time, False, lane_count, new_arrivals_fx[lane], fx_cycle_mins)
-                new_arrivals_fx[lane] = max(0, new_arrivals_fx[lane] - extra_cleared)
+                unc, total_used, wst, used_green, overhead = sim.simulate_lane_traffic(lane, q, alloc, avg_car_time, False, lane_count)
                 
                 fx_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': total_used, 'wst': wst, 'green': used_green, 'overhead': overhead, 'ev': ev_data}
                 total_fx_used_time += total_used
@@ -241,7 +208,6 @@ def simulate():
                 
                 penalty_holdover = red_time 
                 penalty_new = red_time / 2.0 
-                
                 if red_time > 60:
                     escalation = (red_time - 60) * 1.25
                     penalty_holdover += escalation
@@ -253,10 +219,7 @@ def simulate():
                 loss_starve = (holdovers ** 2) * 5.0 
                 
                 total_loss = loss_waiting + loss_failed + loss_queue + loss_starve
-                
-                if is_ai:
-                    sim.ml_agent.backpropagate(lane, res['unc'], res['wst'], holdovers)
-                    
+                if is_ai: sim.ml_agent.backpropagate(lane, res['unc'], res['wst'], holdovers)
                 return int(total_loss), int(loss_waiting), int(loss_failed), int(loss_queue), int(loss_starve), int(red_time)
 
             for phase_step, lane in enumerate(ai_execution_order, 1):
