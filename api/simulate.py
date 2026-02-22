@@ -3,35 +3,32 @@ import random
 
 app = Flask(__name__)
 
-class ReinforcementLearningAgent:
+class GradientRLAgent:
     def __init__(self, lanes):
         self.lanes = lanes
-        self.weights = {lane: {"density_importance": 1.0, "cross_traffic_pressure": 0.1} for lane in lanes}
-        
-        # FIX: Dramatically lowered learning rate for smooth, stable convergence
-        self.learning_rate = 0.005 
+        # Neural weights for each lane. The AI updates these via Gradient Descent
+        self.weights = {lane: 1.0 for lane in lanes}
+        self.learning_rate = 0.01 
 
-    def get_target_time(self, lane, queue, lane_count, cross_queues_total, avg_car_time):
-        w_density = self.weights[lane]["density_importance"]
-        w_cross = self.weights[lane]["cross_traffic_pressure"]
-
-        ideal_time = (queue / lane_count) * avg_car_time * w_density
-        cross_pressure_reduction = cross_queues_total * w_cross
+    def get_action(self, lane, queue, lane_count, avg_car_time):
+        # Forward Pass: Predict optimal time based on current learned weights
+        ideal_base_time = (queue / lane_count) * avg_car_time
+        target = ideal_base_time * self.weights[lane]
         
-        target = ideal_time - cross_pressure_reduction
+        # We always enforce a minimum 15s green and maximum 160s green for safety
         return max(15, min(160, int(target)))
 
-    def update_weights(self, lane, wasted, failed):
-        if wasted > 0:
-            self.weights[lane]["density_importance"] -= self.learning_rate * 0.5
-            self.weights[lane]["cross_traffic_pressure"] += self.learning_rate * 0.2
-        if failed > 0:
-            self.weights[lane]["density_importance"] += self.learning_rate * 1.0
-            self.weights[lane]["cross_traffic_pressure"] -= self.learning_rate * 0.1
+    def backpropagate(self, lane, failed_cars, wasted_time):
+        # Backward Pass (Learning): Adjust weights based on the loss gradients
+        if failed_cars > 0:
+            # Gradient penalty for failing cars: drastically increase weight to get more time
+            self.weights[lane] += self.learning_rate * failed_cars * 1.5
+        elif wasted_time > 0:
+            # Gradient penalty for wasting time: decrease weight to shrink green time and save cross-traffic
+            self.weights[lane] -= self.learning_rate * (wasted_time / 5.0)
 
-        # FIX: Tightened the safety bounds so the RL model can't explore into disastrous extremes
-        self.weights[lane]["density_importance"] = max(0.8, min(2.0, self.weights[lane]["density_importance"]))
-        self.weights[lane]["cross_traffic_pressure"] = max(0.05, min(0.4, self.weights[lane]["cross_traffic_pressure"]))
+        # Gradient Clipping to prevent the model from exploding
+        self.weights[lane] = max(0.5, min(3.0, self.weights[lane]))
 
 
 class RealisticTrafficOptimizer:
@@ -42,9 +39,7 @@ class RealisticTrafficOptimizer:
         self.ai_queues = {lane: 0 for lane in self.lanes}
         self.fx_queues = {lane: 0 for lane in self.lanes}
         self.emergency_cooldowns = {lane: 0 for lane in self.lanes}
-        self.ai_total_loss = 0
-        self.fx_total_loss = 0
-        self.rl_agent = ReinforcementLearningAgent(self.lanes)
+        self.ml_agent = GradientRLAgent(self.lanes)
 
     def generate_arrivals(self, lane, arrival_ranges_per_min, cycle_length_mins):
         prob = random.random()
@@ -79,7 +74,7 @@ class RealisticTrafficOptimizer:
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Stabilized RL Agent is Live!"})
+        return jsonify({"status": "SUCCESS! Machine Learning Backend is Live!"})
 
     data = request.json
     total_cycles = data.get('total_cycles', 50)
@@ -152,38 +147,35 @@ def simulate():
             unc, used, wst = sim.simulate_lane_traffic(q, alloc, avg_car_time, False, lane_count)
             fx_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': alloc, 'wst': wst, 'ev': ev_data}
 
-        # 🧠 PHASE 2: APPLY RL MULTIPLIERS & CALCULATE LOSS
-        def calculate_rl_loss(lane, res, red_time, is_ai):
-            lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
-            holdovers = max(0, res['q'] - new_arrivals[lane])
+        # 🧠 PHASE 2: EXACT MATHEMATICAL LOSS CALCULATION
+        def calculate_exact_loss(lane, res, red_time, is_ai):
             avg_wait = red_time / 2.0
-            wait_penalty = (holdovers * red_time) + (new_arrivals[lane] * avg_wait)
             
-            # --- DYNAMIC RL MULTIPLIERS ---
-            flags = []
-            
-            stuck_mult = 2.5 if holdovers > 0 else 1.0
-            if holdovers > 0: flags.append("🔄 Multi-Cycle Jam")
-            
-            timeout_mult = 1.5 if red_time > 60 else 1.0
-            if red_time > 60: flags.append("⏳ >60s Wait Timeout")
-            
-            jam_mult = 3.0 if res['q'] > (30 * lane_count) else 1.0
-            if jam_mult > 1.0: flags.append("💥 Critical Density")
-
-            loss = (res['wst'] * 5) + (res['unc'] * (red_time * stuck_mult * timeout_mult)) + (wait_penalty * jam_mult)
-            
-            if is_ai:
-                sim.rl_agent.update_weights(lane, res['wst'], res['unc'])
+            # --- USER DEFINED MATH ---
+            if red_time <= 60:
+                penalty_per_car = avg_wait
+            else:
+                penalty_per_car = avg_wait + ((red_time - 60) * 1.25)
                 
-            return int(loss), int(avg_wait), int(wait_penalty), flags
+            loss_waiting = res['q'] * penalty_per_car
+            
+            # Failed cars suffer the seconds to next green * 1.5
+            loss_failed = res['unc'] * (red_time * 1.5)
+            
+            total_loss = loss_waiting + loss_failed
+            
+            # Update ML Neural Weights via Backpropagation
+            if is_ai:
+                sim.ml_agent.backpropagate(lane, res['unc'], res['wst'])
+                
+            return int(total_loss), int(loss_waiting), int(loss_failed), int(red_time)
 
         # PROCESS AI LOGS
         for phase_step, lane in enumerate(ai_execution_order, 1):
             res = ai_phase_results[lane]
             red_time = total_ai_used_time - res['used']
-            loss, avg_wait, wait_penalty, flags = calculate_rl_loss(lane, res, red_time, True)
             
+            loss, l_wait, l_fail, true_red = calculate_exact_loss(lane, res, red_time, True)
             sim.ai_total_loss += loss
             sim.ai_queues[lane] = res['unc']
 
@@ -193,15 +185,15 @@ def simulate():
             log_data_ai.append({
                 "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": timing_str, 
                 "Queue": str(res['q']), "Cycle Loss": loss, "Events": event_ai,
-                "Arrivals": new_arrivals[lane], "Failed": res['unc'], "Wasted": res['wst'], "AvgWait": avg_wait, "WaitPenalty": wait_penalty, "Flags": flags
+                "Arrivals": new_arrivals[lane], "Failed": res['unc'], "LossWait": l_wait, "LossFail": l_fail, "RedTime": true_red
             })
 
         # PROCESS FIXED LOGS
         for phase_step, lane in enumerate(fx_execution_order, 1):
             res = fx_phase_results[lane]
             red_time = total_fx_used_time - res['used']
-            loss, avg_wait, wait_penalty, flags = calculate_rl_loss(lane, res, red_time, False)
             
+            loss, l_wait, l_fail, true_red = calculate_exact_loss(lane, res, red_time, False)
             sim.fx_total_loss += loss
             sim.fx_queues[lane] = res['unc']
 
@@ -214,18 +206,17 @@ def simulate():
             log_data_fx.append({
                 "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": f"{res['alloc']}s", 
                 "Queue": str(res['q']), "Cycle Loss": loss, "Events": event_fx,
-                "Arrivals": new_arrivals[lane], "Failed": res['unc'], "Wasted": res['wst'], "AvgWait": avg_wait, "WaitPenalty": wait_penalty, "Flags": flags
+                "Arrivals": new_arrivals[lane], "Failed": res['unc'], "LossWait": l_wait, "LossFail": l_fail, "RedTime": true_red
             })
 
         # ==========================================
-        # AI ACTION DECISION (Based on learned weights)
+        # PREDICT NEXT ACTION VIA ML MODEL
         # ==========================================
-        cross_traffic_sums = {lane: sum(sim.ai_queues[l] for l in sim.lanes if l != lane) for lane in sim.lanes}
-        
         for lane in sim.lanes:
             lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
             
-            target_time = sim.rl_agent.get_target_time(lane, sim.ai_queues[lane], lane_count, cross_traffic_sums[lane], avg_car_time)
+            # The ML Agent predicts the optimal timing
+            target_time = sim.ml_agent.get_action(lane, sim.ai_queues[lane], lane_count, avg_car_time)
             
             if sim.emergency_cooldowns[lane] > 0:
                 target_time += 15

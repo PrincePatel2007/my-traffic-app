@@ -84,9 +84,9 @@ export default function TrafficDashboard() {
 
       <div className="flex-1 p-10 overflow-x-hidden">
         <header className="mb-10 flex justify-between items-start">
-          <div><div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-sm font-bold mb-4"><Zap size={14} /> Neural RL Engine</div>
+          <div><div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-sm font-bold mb-4"><Zap size={14} /> Neural ML Engine</div>
             <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">Smart City Traffic AI</h1>
-            <p className="text-slate-500 mt-2 text-lg">Comparing real-time Reinforcement Learning Control against Fixed Manual Timers.</p></div>
+            <p className="text-slate-500 mt-2 text-lg">Comparing Machine Learning Control against Fixed Manual Timers.</p></div>
           <button onClick={() => setIsDetailedView(!isDetailedView)} className="flex items-center gap-2 bg-white border px-4 py-2 rounded-lg font-bold text-sm shadow-sm hover:bg-slate-50">
             {isDetailedView ? <Columns size={16} /> : <LayoutList size={16} />} {isDetailedView ? "Side-by-Side View" : "Detailed Stacked View"}
           </button>
@@ -94,12 +94,12 @@ export default function TrafficDashboard() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
           <MetricCard title="Fixed Inefficiency" value={metrics.fxLoss.toLocaleString()} icon={<AlertTriangle size={20} />} color="text-red-600" bgColor="bg-red-50" />
-          <MetricCard title="RL System Inefficiency" value={metrics.aiLoss.toLocaleString()} icon={<Zap size={20} />} color="text-emerald-600" bgColor="bg-emerald-50" subLabel={`Saved ${Math.max(0, metrics.fxLoss - metrics.aiLoss).toLocaleString()} pts`} />
+          <MetricCard title="ML System Inefficiency" value={metrics.aiLoss.toLocaleString()} icon={<Zap size={20} />} color="text-emerald-600" bgColor="bg-emerald-50" subLabel={`Saved ${Math.max(0, metrics.fxLoss - metrics.aiLoss).toLocaleString()} pts`} />
           <MetricCard title="Total Gain" value={`${metrics.gain.toFixed(1)}%`} icon={<TrendingDown size={20} />} color="text-indigo-600" bgColor="bg-indigo-50" />
         </div>
 
         <div className={`grid gap-8 items-start ${isDetailedView ? 'grid-cols-1' : '2xl:grid-cols-2'}`}>
-          <TableSection title="RL Optimized Log" data={aiLogs} detailed={isDetailedView} color="emerald" />
+          <TableSection title="ML Optimized Log" data={aiLogs} detailed={isDetailedView} color="emerald" />
           <TableSection title="Fixed Manual Log" data={fxLogs} detailed={isDetailedView} color="slate" />
         </div>
       </div>
@@ -142,25 +142,16 @@ function TableSection({ title, data, detailed, color }: any) {
                     
                     {detailed && (
                       <div className="mt-2 flex flex-col gap-2">
-                        {/* CORE METRICS */}
+                        {/* REFINED MATHEMATICAL METRICS */}
                         <div className="flex flex-wrap gap-2 text-[10px] uppercase font-bold text-slate-500 bg-slate-50 p-2 rounded border">
                           <span className="bg-white px-1.5 py-0.5 rounded border">📥 ARR: {row?.Arrivals ?? 0}</span>
                           <span className={`px-1.5 py-0.5 rounded border ${(row?.Failed || 0) > 0 ? 'bg-red-50 text-red-600 border-red-200' : 'bg-white'}`}>❌ FAIL: {row?.Failed ?? 0}</span>
-                          <span className={`px-1.5 py-0.5 rounded border ${(row?.Wasted || 0) > 0 ? 'bg-orange-50 text-orange-600 border-orange-200' : 'bg-white'}`}>🗑️ WST: {row?.Wasted ?? 0}S</span>
-                          <span className="bg-sky-50 text-sky-600 px-1.5 py-0.5 rounded border border-sky-200">⏱️ WAIT: {row?.AvgWait ?? 0}S</span>
-                          <span className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-200">⏳ PEN: {row?.WaitPenalty ?? 0}</span>
+                          
+                          {/* NEW EXPLICIT MATH BREAKDOWN */}
+                          <span className={`px-1.5 py-0.5 rounded border ${row?.RedTime > 60 ? 'bg-orange-50 text-orange-600 border-orange-200' : 'bg-slate-100'}`}>🛑 RED TIME: {row?.RedTime ?? 0}S</span>
+                          <span className="bg-sky-50 text-sky-600 px-1.5 py-0.5 rounded border border-sky-200">⏳ WAIT LOSS: {row?.LossWait ?? 0}</span>
+                          <span className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-200">💥 FAIL LOSS: {row?.LossFail ?? 0}</span>
                         </div>
-                        
-                        {/* RL PENALTY FLAGS (Only shows if triggered) */}
-                        {row?.Flags && row.Flags.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {row.Flags.map((flag: string, fIdx: number) => (
-                              <span key={fIdx} className="bg-red-100 text-red-700 border border-red-300 px-2 py-0.5 rounded font-black text-[9px] uppercase tracking-wider animate-pulse">
-                                {flag}
-                              </span>
-                            ))}
-                          </div>
-                        )}
                       </div>
                     )}
                   </td>
