@@ -19,7 +19,6 @@ class GradientRLAgent:
         target = ideal_base_time * self.weights[lane]
         
         min_green = max(10, int(avg_car_time * 2)) 
-        # UNBOUNDED AI: Can scale as high as needed, but will cut early if queue clears!
         return max(min_green, int(round(target)))
 
     def backpropagate(self, lane, failed_cars, wasted_time, holdovers):
@@ -68,7 +67,6 @@ class RealisticTrafficOptimizer:
         
         safe_lane_count = max(1, lane_count)
             
-        # O(1) PERFORMANCE UPGRADE: Fast-forward math to prevent Server Timeouts!
         if queue > 50:
             max_possible_clearance = int((allocated_green / avg_car_time) * safe_lane_count)
             cleared_cars = min(queue, max_possible_clearance)
@@ -86,7 +84,6 @@ class RealisticTrafficOptimizer:
         
         uncleared = queue - cleared_cars
         
-        # AGGRESSIVE DENSITY TRIMMING: Automatically cuts time the moment the immediate queue is gone
         if can_cut_early:
             used_green = time_spent_moving if uncleared == 0 else allocated_green
             wasted_green = used_green - time_spent_moving if uncleared == 0 else 0
@@ -100,7 +97,7 @@ class RealisticTrafficOptimizer:
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Aggressive Density Trimming Live!"})
+        return jsonify({"status": "SUCCESS! HCM Limits Removed. Prepare for Gridlock!"})
 
     try:
         data = request.json
@@ -110,14 +107,6 @@ def simulate():
         raw_lanes = data.get('lanes', {"NS": 3, "EW": 3})
         lanes_config = {"NS": max(1, int(raw_lanes.get("NS", 3) or 3)), "EW": max(1, int(raw_lanes.get("EW", 3) or 3))}
         
-        MAX_CARS_PER_MIN_PER_LANE = 5.0 
-        for lane in ["North", "South", "East", "West"]:
-            lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
-            max_arrival_request = arrivals_per_min[lane][1]
-            cars_per_lane = max_arrival_request / max(1, lane_count)
-            if cars_per_lane > MAX_CARS_PER_MIN_PER_LANE:
-                return jsonify({"error": "Traffic Flow Violation on " + lane + " bound. Exceeds HCM max capacity."}), 400
-
         ev_probs = data.get('ev_probs', {"North": 0.05, "South": 0.05, "East": 0.05, "West": 0.05})
         user_fx_times = data.get('fx_times', {"North": 45, "South": 45, "East": 60, "West": 60})
 
