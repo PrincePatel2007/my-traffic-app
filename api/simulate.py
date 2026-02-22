@@ -11,6 +11,7 @@ class GradientRLAgent:
         self.learning_rate = 0.01 
 
     def get_action(self, lane, queue, lane_count, avg_car_time):
+        # If the lane is empty, the AI can still skip it entirely (0s)
         if queue == 0:
             return 0 
             
@@ -18,18 +19,18 @@ class GradientRLAgent:
         ideal_base_time = (queue / safe_lane_count) * avg_car_time
         target = ideal_base_time * self.weights[lane]
         
-        # INCREASED MINIMUM BOUND: If cars are present, force at least 5 seconds!
         return max(5, min(160, int(round(target))))
 
     def backpropagate(self, lane, failed_cars, wasted_time, holdovers):
+        # We cranked up the panic response. If cars are starved, the AI violently course-corrects!
         if holdovers > 0:
-            self.weights[lane] += self.learning_rate * min(20, holdovers) * 0.5
+            self.weights[lane] += self.learning_rate * min(30, holdovers) * 1.0
         elif failed_cars > 0:
-            self.weights[lane] += self.learning_rate * min(20, failed_cars) * 0.2
+            self.weights[lane] += self.learning_rate * min(20, failed_cars) * 0.4
         elif wasted_time > 0:
             self.weights[lane] -= self.learning_rate * (wasted_time / 5.0)
 
-        self.weights[lane] = max(0.1, min(4.0, self.weights[lane]))
+        self.weights[lane] = max(0.1, min(5.0, self.weights[lane]))
 
 
 class RealisticTrafficOptimizer:
@@ -54,38 +55,49 @@ class RealisticTrafficOptimizer:
         
         safe_max = max(min_arr, max_arr)
         spike_max = int(safe_max * 1.5) + 1
-        
         return random.randint(safe_max, spike_max) if prob < 0.10 else random.randint(min_arr, safe_max)
 
-    def simulate_lane_traffic(self, queue, allocated_time, avg_car_time, can_cut_early, lane_count):
-        time_spent = 0
+    def simulate_lane_traffic(self, queue, allocated_green, avg_car_time, can_cut_early, lane_count):
+        # NEW: Phase Transition Overhead (Yellow + All Red + Startup)
+        if allocated_green == 0:
+            return queue, 0, 0, 0, 0 # Completely skipped, no overhead!
+            
+        overhead_yellow = 5
+        overhead_safety_red = 3
+        overhead_startup = 3
+        total_overhead = overhead_yellow + overhead_safety_red + overhead_startup # 11 seconds dead time
+        
+        time_spent_moving = 0
         cleared_cars = 0
         safe_lane_count = max(1, lane_count)
         
         while cleared_cars < queue:
             car_time = random.randint(max(1, avg_car_time - 1), avg_car_time + 1)
-            if time_spent + car_time <= allocated_time:
+            if time_spent_moving + car_time <= allocated_green:
                 cleared_cars += min(safe_lane_count, queue - cleared_cars)
-                time_spent += car_time
+                time_spent_moving += car_time
             else:
                 break 
         
         uncleared = queue - cleared_cars
         
         if can_cut_early:
-            used_time = time_spent if uncleared == 0 else allocated_time
-            wasted = used_time - time_spent if uncleared == 0 else 0
+            used_green = time_spent_moving if uncleared == 0 else allocated_green
+            wasted_green = used_green - time_spent_moving if uncleared == 0 else 0
         else:
-            used_time = allocated_time
-            wasted = allocated_time - time_spent if uncleared == 0 else 0
+            used_green = allocated_green
+            wasted_green = allocated_green - time_spent_moving if uncleared == 0 else 0
                 
-        return uncleared, used_time, wasted
+        # Total time cost to the intersection = The green time used + the 11s transition overhead
+        total_phase_time = used_green + total_overhead
+        
+        return uncleared, total_phase_time, wasted_green, used_green, total_overhead
 
 
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Time Stop Loophole Closed!"})
+        return jsonify({"status": "SUCCESS! Phase Overhead Penalty Live!"})
 
     try:
         data = request.json
@@ -106,8 +118,6 @@ def simulate():
         for cycle in range(1, total_cycles + 1):
             sim.fx_times = user_fx_times.copy()
             
-            # LOOPHOLE FIX: Force the AI to accept at least 0.25 minutes (15s) of cars every cycle, 
-            # even if it somehow manages to shrink its active time to 0s! Time always flows!
             ai_cycle_mins = max(0.25, sim.last_ai_cycle_time / 60.0)
             fx_cycle_mins = max(0.25, sim.last_fx_cycle_time / 60.0)
 
@@ -153,9 +163,9 @@ def simulate():
                     effective_pos = max(1, ev_data["pos_ai"] // lane_count)
                     alloc = max(alloc, effective_pos * (avg_car_time + 1))
                 
-                unc, used, wst = sim.simulate_lane_traffic(q, alloc, avg_car_time, True, lane_count)
-                ai_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': used, 'wst': wst, 'ev': ev_data}
-                total_ai_used_time += used
+                unc, total_used, wst, used_green, overhead = sim.simulate_lane_traffic(q, alloc, avg_car_time, True, lane_count)
+                ai_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': total_used, 'wst': wst, 'green': used_green, 'overhead': overhead, 'ev': ev_data}
+                total_ai_used_time += total_used
 
             sim.last_ai_cycle_time = total_ai_used_time
 
@@ -167,15 +177,15 @@ def simulate():
                 alloc = sim.fx_times[lane]
                 lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
                 ev_data = next((ev for ev in active_evs if ev["lane"] == lane), None)
-                unc, used, wst = sim.simulate_lane_traffic(q, alloc, avg_car_time, False, lane_count)
-                fx_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': alloc, 'wst': wst, 'ev': ev_data}
-                total_fx_used_time += used
+                
+                unc, total_used, wst, used_green, overhead = sim.simulate_lane_traffic(q, alloc, avg_car_time, False, lane_count)
+                fx_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': total_used, 'wst': wst, 'green': used_green, 'overhead': overhead, 'ev': ev_data}
+                total_fx_used_time += total_used
                 
             sim.last_fx_cycle_time = total_fx_used_time
 
             # 🧠 PHASE 2: EXACT MATHEMATICAL LOSS CALCULATION
             def calculate_exact_loss(lane, res, red_time, is_ai, current_new_arrivals):
-                # LOOPHOLE FIX: If the AI forces a 0s red time, but leaves cars stranded, punish it!
                 effective_fail_red = max(45, red_time)
                 
                 avg_wait = red_time / 2.0
@@ -189,7 +199,9 @@ def simulate():
                 loss_queue = res['q'] * 5.0
                 
                 holdovers = max(0, res['q'] - current_new_arrivals[lane])
-                loss_starve = (holdovers ** 2) * 2.0 
+                
+                # CRITICAL UPDATE: Starvation penalty is much harsher to prevent AI from eating the penalty
+                loss_starve = (holdovers ** 2) * 5.0 
                 
                 total_loss = loss_waiting + loss_failed + loss_queue + loss_starve
                 
@@ -208,12 +220,20 @@ def simulate():
                 sim.ai_queues[lane] = res['unc']
 
                 event_ai = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_ai']}) ✅ | " if res['ev'] else ("⚡ Recovery | " if sim.emergency_cooldowns[lane] > 0 else "")
-                timing_str = f"{res['alloc']}s ✂️ Cut to {res['used']}s" if res['used'] < res['alloc'] else f"{res['alloc']}s"
+                
+                # NEW UI FORMATTING: Explicitly showing the 11s switch overhead
+                if res['alloc'] == 0:
+                    timing_str = "⏭️ Skipped"
+                else:
+                    if res['green'] < res['alloc']:
+                        timing_str = f"🟩 {res['alloc']}s ✂️ {res['green']}s (+11s 🚦)"
+                    else:
+                        timing_str = f"🟩 {res['alloc']}s (+11s 🚦)"
 
                 log_data_ai.append({
                     "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": timing_str, 
                     "Queue": str(res['q']), "Cycle Loss": loss, "Events": event_ai,
-                    "Arrivals": new_arrivals_ai[lane], "Failed": res['unc'], 
+                    "Arrivals": new_arrivals_ai[lane], "Failed": res['unc'], "Wasted": res['wst'],
                     "LossWait": l_wait, "LossFail": l_fail, "LossQueue": l_queue, "LossStarve": l_starve, "RedTime": true_red
                 })
 
@@ -232,10 +252,15 @@ def simulate():
                     req = max(1, res['ev']['pos_fx'] // lane_count) * (avg_car_time + 1)
                     event_fx = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_fx']}) " + ("⚠️ Lucky | " if res['alloc'] >= req else "❌ STRANDED! | ")
 
+                if res['alloc'] == 0:
+                    timing_str = "⏭️ Skipped"
+                else:
+                    timing_str = f"🟩 {res['alloc']}s (+11s 🚦)"
+
                 log_data_fx.append({
-                    "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": f"{res['alloc']}s", 
+                    "Cycle": cycle, "Phase Sequence": f"{phase_step}. {lane}", "Allocated ➡️ Used": timing_str, 
                     "Queue": str(res['q']), "Cycle Loss": loss, "Events": event_fx,
-                    "Arrivals": new_arrivals_fx[lane], "Failed": res['unc'], 
+                    "Arrivals": new_arrivals_fx[lane], "Failed": res['unc'], "Wasted": res['wst'],
                     "LossWait": l_wait, "LossFail": l_fail, "LossQueue": l_queue, "LossStarve": l_starve, "RedTime": true_red
                 })
 
