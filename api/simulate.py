@@ -10,27 +10,23 @@ class GradientRLAgent:
         self.weights = {lane: 1.0 for lane in lanes}
         self.learning_rate = 0.01 
 
-    def get_action(self, lane, queue, lane_count, avg_car_time):
-        if queue == 0:
+    def get_action(self, lane, queue, lane_count, avg_car_time, e_count):
+        if queue == 0 and e_count == 0:
             return 0 
             
         safe_lane_count = max(1, lane_count)
         cars_per_lane = queue / safe_lane_count
         
-        # =======================================================
-        # ARTERIAL FLUSHING: 
-        # If a lane exceeds 10 cars per lane, it is in a Gridlock State.
-        # We give it a 1.5x time multiplier to flush the massive wave. 
-        # This will naturally force the AI to sacrifice the cross-streets (dropping them to 3s).
-        # =======================================================
+        # CORE TIMING FORMULA: Base clearance + 15s buffer per Emergency Vehicle
+        ideal_base_time = (cars_per_lane * avg_car_time) + (e_count * 15)
+        
+        # ARTERIAL FLUSHING: 1.5x multiplier for gridlocked lanes (>10 cars per lane)
         if cars_per_lane > 10.0:
-            ideal_base_time = cars_per_lane * avg_car_time * 1.5
-        else:
-            ideal_base_time = cars_per_lane * avg_car_time
+            ideal_base_time *= 1.5
             
         target = ideal_base_time * self.weights[lane]
         
-        # Allow micro-phases for calculated sacrifices (enough time for 1 car)
+        # Minimum green is enough time for 1 car to pass (Micro-Phasing)
         min_green = max(3, int(avg_car_time)) 
         return max(min_green, int(round(target)))
 
@@ -54,9 +50,6 @@ class RealisticTrafficOptimizer:
         self.fx_times = {"North": 45, "South": 45, "East": 60, "West": 60}
         self.ai_queues = {lane: 0 for lane in self.lanes}
         self.fx_queues = {lane: 0 for lane in self.lanes}
-        self.emergency_cooldowns = {lane: 0 for lane in self.lanes}
-        self.ai_total_loss = 0
-        self.fx_total_loss = 0
         self.ml_agent = GradientRLAgent(self.lanes)
         self.last_ai_cycle_time = 120 
         self.last_fx_cycle_time = 120
@@ -80,11 +73,11 @@ class RealisticTrafficOptimizer:
         
         safe_lane_count = max(1, lane_count)
             
+        # O(1) PERFORMANCE UPGRADE & STRAGGLER FLUSH (Passage Extension)
         if queue > 50:
             max_possible_clearance = int((allocated_green / avg_car_time) * safe_lane_count)
             cleared_cars = min(queue, max_possible_clearance)
             
-            # STRAGGLER FLUSH
             if 0 < (queue - cleared_cars) <= safe_lane_count:
                 cleared_cars = queue
                 time_spent_moving = (cleared_cars / safe_lane_count) * avg_car_time
@@ -109,6 +102,7 @@ class RealisticTrafficOptimizer:
         
         uncleared = queue - cleared_cars
         
+        # AGGRESSIVE DENSITY TRIMMING: Snap the light red if density drops to 0
         if can_cut_early:
             used_green = time_spent_moving if uncleared == 0 else allocated_green
             wasted_green = used_green - time_spent_moving if uncleared == 0 else 0
@@ -122,7 +116,7 @@ class RealisticTrafficOptimizer:
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Arterial Flushing Live!"})
+        return jsonify({"status": "SUCCESS! Dynamic Priority Engine Online!"})
 
     try:
         data = request.json
@@ -156,14 +150,7 @@ def simulate():
                 new_arrivals_fx[lane] = fx_cars
                 sim.fx_queues[lane] += fx_cars
 
-            for lane in sim.lanes:
-                lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
-                target_time = sim.ml_agent.get_action(lane, sim.ai_queues[lane], lane_count, avg_car_time)
-                if sim.emergency_cooldowns[lane] > 0:
-                    target_time += 15
-                    sim.emergency_cooldowns[lane] -= 1
-                sim.ai_times[lane] = target_time
-
+            # 1. EMERGENCIES INJECTION
             ev_priorities = {"Ambulance": 1, "Fire Truck": 2, "Police Car": 3}
             ev_icons = {"Ambulance": "🚑", "Fire Truck": "🚒", "Police Car": "🚓"}
             active_evs = []
@@ -173,14 +160,35 @@ def simulate():
                     pos_ai = random.randint(1, max(1, sim.ai_queues[lane]))
                     pos_fx = random.randint(1, max(1, sim.fx_queues[lane]))
                     active_evs.append({"lane": lane, "type": ev_type, "icon": ev_icons[ev_type], "priority": ev_priorities[ev_type], "pos_ai": pos_ai, "pos_fx": pos_fx})
-                    sim.emergency_cooldowns[lane] = 3 
-            active_evs.sort(key=lambda x: (x["priority"], x["pos_ai"]))
-
-            ai_execution_order = [ev["lane"] for ev in active_evs]
+            
+            # 2. DYNAMIC LANE SCORING (THE "BRAIN")
+            lane_stats = {}
             for lane in sim.lanes:
-                if lane not in ai_execution_order: ai_execution_order.append(lane)
+                v = sim.ai_queues[lane]
+                evs_in_lane = [ev for ev in active_evs if ev["lane"] == lane]
+                e_count = len(evs_in_lane)
+                closest_e = min([ev["pos_ai"] for ev in evs_in_lane]) if e_count > 0 else 100
+                
+                # Priority math implementation
+                e_score = (2500 / max(1, closest_e)) if e_count > 0 else 0
+                v_score = v * 2.5
+                priority = e_score + v_score
+                
+                lane_stats[lane] = {"v": v, "e": e_count, "closest_e": closest_e, "priority": priority, "ev_data": evs_in_lane[0] if evs_in_lane else None}
+
+            # AI perfectly reorders the execution sequence based on urgency!
+            ai_execution_order = sorted(sim.lanes, key=lambda l: lane_stats[l]["priority"], reverse=True)
+            
+            # Fixed timer remains strictly sequential
             fx_execution_order = ["North", "South", "East", "West"]
 
+            # 3. GET AI ACTION TIMES
+            for lane in sim.lanes:
+                lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
+                e_count = lane_stats[lane]["e"]
+                sim.ai_times[lane] = sim.ml_agent.get_action(lane, sim.ai_queues[lane], lane_count, avg_car_time, e_count)
+
+            # 4. EXECUTE AI PHASES
             ai_phase_results = {}
             total_ai_used_time = 0
             for lane in ai_execution_order:
@@ -188,33 +196,35 @@ def simulate():
                 alloc = sim.ai_times[lane]
                 lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
                 
-                ev_data = next((ev for ev in active_evs if ev["lane"] == lane), None)
+                ev_data = lane_stats[lane]["ev_data"]
                 if ev_data: 
                     effective_pos = max(1, ev_data["pos_ai"] // lane_count)
                     alloc = max(alloc, int(effective_pos * (avg_car_time + 1)))
                 
                 unc, total_used, wst, used_green, overhead = sim.simulate_lane_traffic(lane, q, alloc, avg_car_time, True, lane_count)
-                
                 ai_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': total_used, 'wst': wst, 'green': used_green, 'overhead': overhead, 'ev': ev_data}
                 total_ai_used_time += total_used
 
             sim.last_ai_cycle_time = total_ai_used_time
 
+            # 5. EXECUTE FIXED PHASES
             fx_phase_results = {}
             total_fx_used_time = 0
             for lane in fx_execution_order:
                 q = sim.fx_queues[lane]
                 alloc = sim.fx_times[lane]
                 lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
-                ev_data = next((ev for ev in active_evs if ev["lane"] == lane), None)
+                
+                evs_in_lane = [ev for ev in active_evs if ev["lane"] == lane]
+                ev_data = evs_in_lane[0] if evs_in_lane else None
                 
                 unc, total_used, wst, used_green, overhead = sim.simulate_lane_traffic(lane, q, alloc, avg_car_time, False, lane_count)
-                
                 fx_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': total_used, 'wst': wst, 'green': used_green, 'overhead': overhead, 'ev': ev_data}
                 total_fx_used_time += total_used
                 
             sim.last_fx_cycle_time = total_fx_used_time
 
+            # 6. EXACT LOSS CALCULATION
             def calculate_exact_loss(lane, res, red_time, is_ai, current_new_arrivals):
                 effective_fail_red = max(45, red_time)
                 holdovers = max(0, res['q'] - current_new_arrivals[lane])
@@ -236,13 +246,16 @@ def simulate():
                 if is_ai: sim.ml_agent.backpropagate(lane, res['unc'], res['wst'], holdovers)
                 return int(total_loss), int(loss_waiting), int(loss_failed), int(loss_queue), int(loss_starve), int(red_time)
 
+            # ASSEMBLE AI LOGS (Dynamically Ordered)
             for phase_step, lane in enumerate(ai_execution_order, 1):
                 res = ai_phase_results[lane]
                 red_time = max(0, total_ai_used_time - res['used'])
                 loss, l_wait, l_fail, l_queue, l_starve, true_red = calculate_exact_loss(lane, res, red_time, True, new_arrivals_ai)
                 sim.ai_total_loss += loss
                 sim.ai_queues[lane] = res['unc']
-                event_ai = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_ai']}) ✅ | " if res['ev'] else ("⚡ Recovery | " if sim.emergency_cooldowns[lane] > 0 else "")
+                
+                event_ai = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_ai']}) ✅ | " if res['ev'] else ""
+                
                 if res['alloc'] == 0: timing_str = "⏭️ Skipped (Empty)"
                 else: timing_str = f"🟩 {res['alloc']}s ✂️ {res['green']}s (+11s 🚦)" if res['green'] < res['alloc'] else f"🟩 {res['alloc']}s (+11s 🚦)"
 
@@ -253,6 +266,7 @@ def simulate():
                     "LossWait": l_wait, "LossFail": l_fail, "LossQueue": l_queue, "LossStarve": l_starve, "RedTime": true_red
                 })
 
+            # ASSEMBLE FX LOGS (Fixed Order)
             for phase_step, lane in enumerate(fx_execution_order, 1):
                 res = fx_phase_results[lane]
                 red_time = max(0, total_fx_used_time - res['used'])

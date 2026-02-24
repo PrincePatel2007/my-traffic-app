@@ -20,10 +20,8 @@ export default function TrafficDashboard() {
 
   const calculateCapacity = () => {
     const totalAvgArrivals = 
-      ((arrivalsPerMin.North[0] + arrivalsPerMin.North[1]) / 2) +
-      ((arrivalsPerMin.South[0] + arrivalsPerMin.South[1]) / 2) +
-      ((arrivalsPerMin.East[0] + arrivalsPerMin.East[1]) / 2) +
-      ((arrivalsPerMin.West[0] + arrivalsPerMin.West[1]) / 2);
+      ((arrivalsPerMin.North[0] + arrivalsPerMin.North[1]) / 2) + ((arrivalsPerMin.South[0] + arrivalsPerMin.South[1]) / 2) +
+      ((arrivalsPerMin.East[0] + arrivalsPerMin.East[1]) / 2) + ((arrivalsPerMin.West[0] + arrivalsPerMin.West[1]) / 2);
     
     const avgLanes = (lanes.NS * 2 + lanes.EW * 2) / 4;
     const maxClearancePerMin = ((60 / avgCarTime) * 0.63) * avgLanes; 
@@ -35,7 +33,7 @@ export default function TrafficDashboard() {
   const cap = calculateCapacity();
 
   const runSimulation = async () => {
-    if (isSimulating) return;
+    if (isSimulating) return; 
     setIsSimulating(true); setAiLogs([]); setFxLogs([]); setMetrics({ aiLoss: 0, fxLoss: 0, gain: 0 }); setSimError(null);
     
     const controller = new AbortController();
@@ -54,7 +52,7 @@ export default function TrafficDashboard() {
       try {
         data = await response.json();
       } catch (parseError) {
-        throw new Error("Server crashed or returned an invalid response.");
+        throw new Error("Server crashed or returned an invalid HTML page (Likely a 504 Timeout on Vercel).");
       }
 
       if (!response.ok || data.error) { throw new Error(data.error || "Simulation failed."); }
@@ -82,9 +80,9 @@ export default function TrafficDashboard() {
       clearTimeout(timeoutId);
       setIsSimulating(false); 
       if (error.name === 'AbortError') {
-          setSimError("⏳ Connection Timed Out: The AI generated massive queues and exceeded the 10-second backend limit.");
+          setSimError("⏳ Connection Timed Out: The AI generated massive queues and exceeded your hosting provider's 10-second backend limit. Try reducing the number of total cycles.");
       } else {
-          setSimError(error.message); 
+          setSimError(error.message || "A network error occurred. Is your Python server running?");
       }
     }
   };
