@@ -9,7 +9,9 @@ export default function TrafficDashboard() {
   
   const [arrivalsPerMin, setArrivalsPerMin] = useState({ North: [1, 4], South: [1, 4], East: [2, 5], West: [2, 5] });
   const [fxTimes, setFxTimes] = useState({ North: 45, South: 45, East: 60, West: 60 });
-  const [evProbs, setEvProbs] = useState({ North: 5, South: 5, East: 5, West: 5 });
+  
+  // NEW: State for Explicit Count of EVs instead of probability
+  const [evCounts, setEvCounts] = useState({ North: 0, South: 0, East: 0, West: 0 });
   
   const [aiLogs, setAiLogs] = useState<any[]>([]);
   const [fxLogs, setFxLogs] = useState<any[]>([]);
@@ -42,7 +44,8 @@ export default function TrafficDashboard() {
     try {
       const response = await fetch('/api/simulate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ total_cycles: totalCycles, avg_car_time: avgCarTime, arrivals_per_min: arrivalsPerMin, lanes: lanes, fx_times: fxTimes, ev_probs: { North: evProbs.North / 100, South: evProbs.South / 100, East: evProbs.East / 100, West: evProbs.West / 100 } }),
+        // NEW: Sending ev_counts payload instead of ev_probs
+        body: JSON.stringify({ total_cycles: totalCycles, avg_car_time: avgCarTime, arrivals_per_min: arrivalsPerMin, lanes: lanes, fx_times: fxTimes, ev_counts: evCounts }),
         signal: controller.signal
       });
       
@@ -124,11 +127,21 @@ export default function TrafficDashboard() {
           <div className="border-t border-slate-100 pt-5"><h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700"><GitMerge size={16} /> Number of Lanes</h3>
             <div className="grid grid-cols-2 gap-3"><div className="flex flex-col"><label className="text-[10px] uppercase font-bold text-slate-400 mb-1">North/South</label><input type="number" min="1" max="6" value={lanes.NS} onChange={(e) => setLanes({...lanes, NS: Number(e.target.value)})} className="border rounded-md p-1.5 text-center outline-none text-xs font-bold" /></div>
               <div className="flex flex-col"><label className="text-[10px] uppercase font-bold text-slate-400 mb-1">East/West</label><input type="number" min="1" max="6" value={lanes.EW} onChange={(e) => setLanes({...lanes, EW: Number(e.target.value)})} className="border rounded-md p-1.5 text-center outline-none text-xs font-bold" /></div></div></div>
-          <div className="border-t border-slate-100 pt-5 pb-2"><div className="bg-red-50 p-4 rounded-xl border border-red-100 shadow-inner"><h3 className="font-black mb-4 flex items-center gap-2 text-red-700 text-sm"><Siren size={18} /> EV Probability (%)</h3>
+          
+          {/* THE NEW EXPLICIT EV COUNTS UI */}
+          <div className="border-t border-slate-100 pt-5 pb-2">
+            <div className="bg-red-50 p-4 rounded-xl border border-red-100 shadow-inner">
+              <h3 className="font-black mb-4 flex items-center gap-2 text-red-700 text-sm"><Siren size={18} /> EVs / Cycle (Count)</h3>
+              <div className="grid grid-cols-2 gap-3">
               {['North', 'South', 'East', 'West'].map(lane => (
-                <div key={lane} className="mb-3 last:mb-0"><label className="flex justify-between text-[10px] uppercase font-black text-red-400 mb-1"><span>{lane}</span><span>{(evProbs as any)[lane]}%</span></label>
-                  <input type="range" min="0" max="100" value={(evProbs as any)[lane]} onChange={(e) => setEvProbs({...evProbs, [lane]: Number(e.target.value)})} className="w-full accent-red-500" /></div>
-              ))}</div></div>
+                <div key={lane} className="flex flex-col">
+                  <label className="text-[10px] uppercase font-black text-red-400 mb-1">{lane}</label>
+                  <input type="number" min="0" max="5" value={(evCounts as any)[lane]} onChange={(e) => setEvCounts({...evCounts, [lane]: Number(e.target.value)})} className="border border-red-200 text-red-700 bg-white rounded-md p-1.5 text-center outline-none text-xs font-bold" />
+                </div>
+              ))}
+              </div>
+            </div>
+          </div>
           
           {simError && (
             <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl text-xs font-medium whitespace-pre-line shadow-sm">

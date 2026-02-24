@@ -17,16 +17,14 @@ class GradientRLAgent:
         safe_lane_count = max(1, lane_count)
         cars_per_lane = queue / safe_lane_count
         
-        # CORE TIMING FORMULA: Base clearance + 15s buffer per Emergency Vehicle
+        # HYBRID TIMING FORMULA: Base clearance + 15s buffer per Emergency Vehicle
         ideal_base_time = (cars_per_lane * avg_car_time) + (e_count * 15)
         
-        # ARTERIAL FLUSHING: 1.5x multiplier for gridlocked lanes (>10 cars per lane)
         if cars_per_lane > 10.0:
             ideal_base_time *= 1.5
             
         target = ideal_base_time * self.weights[lane]
         
-        # Minimum green is enough time for 1 car to pass (Micro-Phasing)
         min_green = max(3, int(avg_car_time)) 
         return max(min_green, int(round(target)))
 
@@ -50,6 +48,12 @@ class RealisticTrafficOptimizer:
         self.fx_times = {"North": 45, "South": 45, "East": 60, "West": 60}
         self.ai_queues = {lane: 0 for lane in self.lanes}
         self.fx_queues = {lane: 0 for lane in self.lanes}
+        
+        # THE FIX: Restored the missing variables that caused the crash!
+        self.emergency_cooldowns = {lane: 0 for lane in self.lanes}
+        self.ai_total_loss = 0
+        self.fx_total_loss = 0
+        
         self.ml_agent = GradientRLAgent(self.lanes)
         self.last_ai_cycle_time = 120 
         self.last_fx_cycle_time = 120
@@ -73,7 +77,6 @@ class RealisticTrafficOptimizer:
         
         safe_lane_count = max(1, lane_count)
             
-        # O(1) PERFORMANCE UPGRADE & STRAGGLER FLUSH (Passage Extension)
         if queue > 50:
             max_possible_clearance = int((allocated_green / avg_car_time) * safe_lane_count)
             cleared_cars = min(queue, max_possible_clearance)
@@ -102,7 +105,6 @@ class RealisticTrafficOptimizer:
         
         uncleared = queue - cleared_cars
         
-        # AGGRESSIVE DENSITY TRIMMING: Snap the light red if density drops to 0
         if can_cut_early:
             used_green = time_spent_moving if uncleared == 0 else allocated_green
             wasted_green = used_green - time_spent_moving if uncleared == 0 else 0
@@ -116,7 +118,7 @@ class RealisticTrafficOptimizer:
 @app.route('/api/simulate', methods=['POST', 'GET'])
 def simulate():
     if request.method == 'GET':
-        return jsonify({"status": "SUCCESS! Dynamic Priority Engine Online!"})
+        return jsonify({"status": "SUCCESS! Fixed Crash & EV Counts Added!"})
 
     try:
         data = request.json
@@ -126,7 +128,8 @@ def simulate():
         raw_lanes = data.get('lanes', {"NS": 3, "EW": 3})
         lanes_config = {"NS": max(1, int(raw_lanes.get("NS", 3) or 3)), "EW": max(1, int(raw_lanes.get("EW", 3) or 3))}
         
-        ev_probs = data.get('ev_probs', {"North": 0.05, "South": 0.05, "East": 0.05, "West": 0.05})
+        # USER REQUEST: Explicit number of Emergency Vehicles per lane
+        ev_counts = data.get('ev_counts', {"North": 0, "South": 0, "East": 0, "West": 0})
         user_fx_times = data.get('fx_times', {"North": 45, "South": 45, "East": 60, "West": 60})
 
         sim = RealisticTrafficOptimizer()
@@ -150,16 +153,22 @@ def simulate():
                 new_arrivals_fx[lane] = fx_cars
                 sim.fx_queues[lane] += fx_cars
 
-            # 1. EMERGENCIES INJECTION
+            # 1. EXPLICIT EMERGENCY VEHICLE INJECTION (Based on User Inputs)
             ev_priorities = {"Ambulance": 1, "Fire Truck": 2, "Police Car": 3}
             ev_icons = {"Ambulance": "🚑", "Fire Truck": "🚒", "Police Car": "🚓"}
             active_evs = []
+            
             for lane in sim.lanes:
-                if random.random() < ev_probs[lane]: 
+                count = int(ev_counts.get(lane, 0))
+                for _ in range(count):
                     ev_type = random.choice(list(ev_priorities.keys()))
+                    # Spawn EV somewhere inside the current queue
                     pos_ai = random.randint(1, max(1, sim.ai_queues[lane]))
                     pos_fx = random.randint(1, max(1, sim.fx_queues[lane]))
                     active_evs.append({"lane": lane, "type": ev_type, "icon": ev_icons[ev_type], "priority": ev_priorities[ev_type], "pos_ai": pos_ai, "pos_fx": pos_fx})
+                
+                if count > 0:
+                    sim.emergency_cooldowns[lane] = 3 
             
             # 2. DYNAMIC LANE SCORING (THE "BRAIN")
             lane_stats = {}
@@ -169,17 +178,14 @@ def simulate():
                 e_count = len(evs_in_lane)
                 closest_e = min([ev["pos_ai"] for ev in evs_in_lane]) if e_count > 0 else 100
                 
-                # Priority math implementation
                 e_score = (2500 / max(1, closest_e)) if e_count > 0 else 0
                 v_score = v * 2.5
                 priority = e_score + v_score
                 
-                lane_stats[lane] = {"v": v, "e": e_count, "closest_e": closest_e, "priority": priority, "ev_data": evs_in_lane[0] if evs_in_lane else None}
+                lane_stats[lane] = {"v": v, "e": e_count, "closest_e": closest_e, "priority": priority, "ev_data": evs_in_lane}
 
-            # AI perfectly reorders the execution sequence based on urgency!
+            # AI perfectly reorders the execution sequence
             ai_execution_order = sorted(sim.lanes, key=lambda l: lane_stats[l]["priority"], reverse=True)
-            
-            # Fixed timer remains strictly sequential
             fx_execution_order = ["North", "South", "East", "West"]
 
             # 3. GET AI ACTION TIMES
@@ -196,13 +202,15 @@ def simulate():
                 alloc = sim.ai_times[lane]
                 lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
                 
-                ev_data = lane_stats[lane]["ev_data"]
-                if ev_data: 
-                    effective_pos = max(1, ev_data["pos_ai"] // lane_count)
+                # Ensure allocation covers the furthest back Emergency Vehicle
+                evs_in_lane = lane_stats[lane]["ev_data"]
+                if evs_in_lane: 
+                    furthest_ev_pos = max([ev["pos_ai"] for ev in evs_in_lane])
+                    effective_pos = max(1, furthest_ev_pos // lane_count)
                     alloc = max(alloc, int(effective_pos * (avg_car_time + 1)))
                 
                 unc, total_used, wst, used_green, overhead = sim.simulate_lane_traffic(lane, q, alloc, avg_car_time, True, lane_count)
-                ai_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': total_used, 'wst': wst, 'green': used_green, 'overhead': overhead, 'ev': ev_data}
+                ai_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': total_used, 'wst': wst, 'green': used_green, 'overhead': overhead, 'evs': evs_in_lane}
                 total_ai_used_time += total_used
 
             sim.last_ai_cycle_time = total_ai_used_time
@@ -216,10 +224,9 @@ def simulate():
                 lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
                 
                 evs_in_lane = [ev for ev in active_evs if ev["lane"] == lane]
-                ev_data = evs_in_lane[0] if evs_in_lane else None
                 
                 unc, total_used, wst, used_green, overhead = sim.simulate_lane_traffic(lane, q, alloc, avg_car_time, False, lane_count)
-                fx_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': total_used, 'wst': wst, 'green': used_green, 'overhead': overhead, 'ev': ev_data}
+                fx_phase_results[lane] = {'q': q, 'alloc': alloc, 'unc': unc, 'used': total_used, 'wst': wst, 'green': used_green, 'overhead': overhead, 'evs': evs_in_lane}
                 total_fx_used_time += total_used
                 
             sim.last_fx_cycle_time = total_fx_used_time
@@ -246,7 +253,7 @@ def simulate():
                 if is_ai: sim.ml_agent.backpropagate(lane, res['unc'], res['wst'], holdovers)
                 return int(total_loss), int(loss_waiting), int(loss_failed), int(loss_queue), int(loss_starve), int(red_time)
 
-            # ASSEMBLE AI LOGS (Dynamically Ordered)
+            # ASSEMBLE AI LOGS
             for phase_step, lane in enumerate(ai_execution_order, 1):
                 res = ai_phase_results[lane]
                 red_time = max(0, total_ai_used_time - res['used'])
@@ -254,7 +261,11 @@ def simulate():
                 sim.ai_total_loss += loss
                 sim.ai_queues[lane] = res['unc']
                 
-                event_ai = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_ai']}) ✅ | " if res['ev'] else ""
+                # Format string for multiple EVs
+                ev_strings_ai = []
+                for ev in sorted(res['evs'], key=lambda x: x['pos_ai']):
+                    ev_strings_ai.append(f"{ev['icon']} (Pos {ev['pos_ai']}) ✅")
+                event_ai = " | ".join(ev_strings_ai) + " | " if ev_strings_ai else ("⚡ Recovery | " if sim.emergency_cooldowns[lane] > 0 else "")
                 
                 if res['alloc'] == 0: timing_str = "⏭️ Skipped (Empty)"
                 else: timing_str = f"🟩 {res['alloc']}s ✂️ {res['green']}s (+11s 🚦)" if res['green'] < res['alloc'] else f"🟩 {res['alloc']}s (+11s 🚦)"
@@ -266,7 +277,7 @@ def simulate():
                     "LossWait": l_wait, "LossFail": l_fail, "LossQueue": l_queue, "LossStarve": l_starve, "RedTime": true_red
                 })
 
-            # ASSEMBLE FX LOGS (Fixed Order)
+            # ASSEMBLE FX LOGS
             for phase_step, lane in enumerate(fx_execution_order, 1):
                 res = fx_phase_results[lane]
                 red_time = max(0, total_fx_used_time - res['used'])
@@ -274,11 +285,13 @@ def simulate():
                 sim.fx_total_loss += loss
                 sim.fx_queues[lane] = res['unc']
                 
-                event_fx = ""
-                if res['ev']:
-                    lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
-                    req = max(1, int(res['ev']['pos_fx'] // lane_count)) * (avg_car_time + 1)
-                    event_fx = f"{res['ev']['icon']} {res['ev']['type']} (Pos {res['ev']['pos_fx']}) " + ("⚠️ Lucky | " if res['alloc'] >= req else "❌ STRANDED! | ")
+                ev_strings_fx = []
+                lane_count = lanes_config["NS"] if lane in ["North", "South"] else lanes_config["EW"]
+                for ev in sorted(res['evs'], key=lambda x: x['pos_fx']):
+                    req = max(1, int(ev['pos_fx'] // lane_count)) * (avg_car_time + 1)
+                    status = "⚠️ Lucky" if res['alloc'] >= req else "❌ STRANDED!"
+                    ev_strings_fx.append(f"{ev['icon']} (Pos {ev['pos_fx']}) {status}")
+                event_fx = " | ".join(ev_strings_fx) + " | " if ev_strings_fx else ""
                 
                 timing_str = "⏭️ Skipped" if res['alloc'] == 0 else f"🟩 {res['alloc']}s (+11s 🚦)"
 
